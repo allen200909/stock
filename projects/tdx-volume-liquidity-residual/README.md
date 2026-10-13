@@ -177,3 +177,5 @@ fully untouched model-design holdout. It remains possible to use its previously
 unexamined return outcomes for a carefully disclosed performance evaluation,
 but any eventual strategy claim needs an additional genuinely untouched
 confirmation sample.
+
+优化执行记录与验收边界见 [优化建议与验收书](docs/optimization-and-acceptance-2026-10-13.md)。

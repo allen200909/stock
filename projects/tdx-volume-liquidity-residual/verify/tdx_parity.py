@@ -15,28 +15,37 @@ NUMERIC = {"Z":"TDX_Z","RVRAW":"TDX_RVRAW",
 BOOLEAN = {"EU":"TDX_EU","VU":"TDX_VU","ABU":"TDX_ABU"}
 
 def compare(df:pd.DataFrame, *, initial_tr:str="hl", tolerance:float=1e-6):
+    if not np.isfinite(tolerance) or tolerance < 0:
+        raise ValueError("tolerance must be finite and nonnegative")
+    if "date" not in df:
+        raise ValueError("Aligned TDX export requires date")
     result=calculate(df,initial_tr=initial_tr)
+    # One common evaluation set; do not discard missing exports per column.
+    evaluated = pd.Series(np.arange(len(df)) >= 145, index=df.index)
+    count = int(evaluated.sum())
+    if count == 0:
+        raise ValueError("No post-warm-up bars to compare (need >145 bars)")
     report={}
-    for key,col in NUMERIC.items():
+    for key,col in (NUMERIC | BOOLEAN).items():
         if col not in df:
             raise ValueError(f"Missing TDX export column: {col}")
-        truth=pd.to_numeric(df[col],errors="coerce")
-        good=truth.notna()
-        if not good.any():
-            raise ValueError(f"No comparable data in {col}")
-        errors=(result.loc[good,key]-truth.loc[good]).abs()
-        report[key]={"max_abs_error":float(errors.max()),
-                     "compared_bars":int(good.sum()),
-                     "pass":bool((errors<=tolerance).all())}
-    for key,col in BOOLEAN.items():
-        if col not in df:
-            raise ValueError(f"Missing TDX export column: {col}")
-        truth=pd.to_numeric(df[col],errors="coerce")
-        good=truth.notna()
-        mismatch=result.loc[good,key].astype(bool).ne(truth.loc[good].ne(0))
-        report[key]={"mismatches":int(mismatch.sum()),
-                     "compared_bars":int(good.sum()),
-                     "pass":not bool(mismatch.any())}
+        truth=pd.to_numeric(df.loc[evaluated,col],errors="coerce")
+        if not np.isfinite(truth.to_numpy(dtype=float)).all():
+            raise ValueError(f"Missing or invalid post-warm-up export: {col}")
+        actual=result.loc[evaluated,key]
+        if not np.isfinite(actual.to_numpy(dtype=float)).all():
+            raise ValueError(f"Nonfinite Python output: {key}")
+        if key in BOOLEAN:
+            if not truth.isin([0,1]).all():
+                raise ValueError(f"Boolean export must be 0/1: {col}")
+            mismatch=actual.astype(bool).ne(truth.astype(bool))
+            report[key]={"mismatches":int(mismatch.sum()),
+                         "compared_bars":count,"pass":not bool(mismatch.any())}
+        else:
+            errors=(actual-truth).abs()
+            report[key]={"max_abs_error":float(errors.max()),
+                         "compared_bars":count,"pass":bool((errors<=tolerance).all())}
+
     return report
 
 def main():

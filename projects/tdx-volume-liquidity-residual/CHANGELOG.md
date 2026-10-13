@@ -49,3 +49,11 @@
 - 增加 DIR 三因子。
 - 区分真空、强扩、吸收。
 - 增加事件去重与充分预热。
+
+## 2026-10-13 Review hardening
+
+- Reject incomplete parity exports and invalid signal flags.
+- Require exchange-calendar T+1 lookup; distinguish missing data from unfilled orders.
+- Validate dates, ticker identity and OHLCV integrity.
+- Correct previously inspected OOS labeling and overlapping-return inference guidance.
+- Add boundary regression tests; frozen TDX formulas are unchanged.

@@ -45,7 +45,7 @@ class VLRTests(unittest.TestCase):
                 "listing_age_days":300,"suspended":False,
                 "limit_up_locked":False,"limit_down_locked":False})
         bars.loc[21,"limit_up_locked"]=True
-        result=build_execution_table(bars)
+        result=build_execution_table(bars, trading_calendar=dates)
         self.assertEqual(result.loc[20,"ENTRY_STATUS"],"UNFILLED")
 
 if __name__=="__main__":

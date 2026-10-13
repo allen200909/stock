@@ -10,6 +10,7 @@ from typing import Literal
 
 import numpy as np
 import pandas as pd
+from validation import daily_dates, finite_numeric
 
 Model = Literal["B0", "E1", "E2", "E3", "E4"]
 DEFAULTS = {
@@ -84,6 +85,23 @@ def calculate(
         raise ValueError(f"Missing columns: {sorted(missing)}")
     if not df.index.is_monotonic_increasing or not df.index.is_unique:
         raise ValueError("Input index must be unique and chronological")
+
+    if df.empty:
+        raise ValueError("Input must not be empty")
+    if "date" in df:
+        dates = daily_dates(df["date"])
+        if not dates.is_unique or not dates.is_monotonic_increasing:
+            raise ValueError("Dates must be unique and chronological")
+    if "ticker" in df and (df["ticker"].isna().any() or df["ticker"].nunique() != 1):
+        raise ValueError("calculate requires exactly one nonmissing ticker")
+    for col in required:
+        finite_numeric(df[col], col)
+    if (df[["open", "high", "low", "close"]].astype(float) <= 0).any().any():
+        raise ValueError("Prices must be positive")
+    prices = df[["open", "high", "low", "close"]].astype(float)
+    if ((prices.high < prices[["open", "close", "low"]].max(axis=1)) |
+            (prices.low > prices[["open", "close", "high"]].min(axis=1))).any():
+        raise ValueError("Inconsistent OHLC bounds")
 
     o, h, l, c, v = (df[col].astype(float) for col in
                      ["open", "high", "low", "close", "volume"])

@@ -70,3 +70,28 @@ Synthetic tests are not evidence of excess returns or production readiness.
 
 **Outstanding:** full point-in-time A-share study, actual TDX exports,
 transaction-cost implementation, complete OOS event study.
+
+## 2026-10-13 review corrections
+
+`build_execution_table(bars, trading_calendar=exchange_sessions)` now requires
+an explicit sorted, unique, timezone-naive exchange session calendar. Do not
+substitute weekday calendars in production. Include the intended next session
+and 20 sessions of history. `listing_age_days` means trading-session age.
+Suspension records should be supplied explicitly (including actual daily amount).
+Missing bars are not automatically interpreted as suspensions or zero turnover.
+
+Only boolean or numeric 0/1 flags are accepted; missing values and strings such
+as `"False"` fail validation. The same ticker/date cannot occur twice.
+`DATA_MISSING` identifies an absent intended T+1 bar, `PENDING` an unknown next
+calendar session, and `UNFILLED` a supplied suspended/locked next session.
+These are distinct from `ELIGIBLE_FOR_FILL_CHECK`, which still does not prove a fill.
+Missing history prevents a 20-session turnover average from bridging gaps.
+
+Parity requires a date column and compares every bar after the baseline's
+145-bar warm-up using one common set. All seven required outputs must be finite;
+event exports must be exactly 0/1. Empty comparisons fail. Pre-warm-up outputs
+are excluded. Replica-generated exports in tests verify gate behavior only,
+not authentic TongDaXin parity. Date order, uniqueness, one-ticker identity
+(when supplied), finite nonnegative inputs, positive prices and OHLC bounds
+are checked by `calculate`. Array-only callers without a date column remain
+responsible for chronology; CSV callers should always supply dates.

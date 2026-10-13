@@ -105,8 +105,9 @@ Signals on the same trading day are cross-sectionally correlated.
 
 Preferred inference:
 
-- bootstrap by trading date; or
-- standard errors clustered by date.
+- resample contiguous trading-date blocks, preserving same-day cross-sections;
+- report sensitivity to block lengths because forward-return windows overlap;
+- date-clustered errors alone do not address dependence across adjacent dates.
 
 Do not report naive per-event t-statistics as if events were independent.
 
@@ -115,9 +116,15 @@ Do not report naive per-event t-statistics as if events were independent.
 Initial fixed split:
 
 - Train / research: 2015-01-01 through 2020-12-31
-- Sealed OOS: 2021-01-01 through 2026-09-30
+- Previously inspected model-design period: 2021-01-01 through 2026-09-30
 
-Parameters may only be changed using the training segment before opening OOS results.
+Residual distributions in this period were already inspected. It is not a sealed
+model-design holdout. Disclose separately whether return outcomes were examined.
+Any previously unexamined outcomes may support a disclosed evaluation, but final
+confirmation requires an additional untouched sample reserved before inspection.
+
+Future parameter selection must use the designated training segment; record all
+prior data exposure and freeze the next confirmation sample before inspection.
 
 Secondary robustness:
 
