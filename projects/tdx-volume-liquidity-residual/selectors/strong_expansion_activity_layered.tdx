@@ -1,6 +1,7 @@
 {===============================================================}
 { V2.1.2 — 强扩↑活跃度分层选股                               }
 { 默认选出：健康活跃 ACTIVE 或 高活跃 HIGHACT                  }
+{ 分层覆盖：QUIET/WARMUP/ACTIVE/HIGHACT/LONGACT/HOT/FADING/OTHER}
 {===============================================================}
 N:=60; ATRN:=14; VOLN:=20;
 ZTH:=1.50; RVVAC:=1.20;
@@ -61,8 +62,11 @@ CNT10:=COUNT(EU,10);
 
 HOT:=CNT10>=3 OR CNT20>=4;
 
-QUIET:=CNT60<=1;
-WARMUP:=CNT60=2 AND CNT10>=1 AND NOT(HOT);
+QUIET:=CNT60<=1 AND NOT(HOT);
+
+WARMUP:=CNT60=2
+        AND CNT10>=1
+        AND NOT(HOT);
 
 ACTIVE:=CNT60>=3
         AND CNT60<=4
@@ -79,6 +83,13 @@ HIGHACT:=CNT60>=5
 LONGACT:=CNT60>=7
          AND CNT10>=1
          AND CNT10<=2
-         AND CNT20<=3;
+         AND CNT20<=3
+         AND NOT(HOT);
+
+FADING:=CNT60>=2
+        AND CNT10=0
+        AND NOT(HOT);
+
+OTHER:=NOT(QUIET OR WARMUP OR ACTIVE OR HIGHACT OR LONGACT OR HOT OR FADING);
 
 XG:ACTIVE OR HIGHACT;
