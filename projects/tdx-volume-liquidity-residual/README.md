@@ -153,3 +153,27 @@ XG:ACTIVE OR HIGHACT;
 ## 免责声明
 
 本项目仅用于量化研究、指标实验和个人学习，不构成任何投资建议。历史统计不能保证未来表现。
+
+
+## 2026-10-13 Verification Infrastructure
+
+The frozen V2.1.2 indicator remains unchanged. The `verify/` directory now
+provides a common Python research interface for B0/E1–E4 with:
+
+- six signal event types, three selectors and eight activity states;
+- prefix-invariance and partition tests (synthetic data);
+- an explicit barwise TongDaXin export comparator;
+- a fail-closed A-share execution research table with next-session
+  `UNFILLED` vs `ELIGIBLE_FOR_FILL_CHECK` distinctions;
+- a GitHub Actions synthetic-test workflow.
+
+E3's experimental TongDaXin formula has an explicit three-stage warm-up.
+Actual TongDaXin parity and an OOS event study have **not yet been completed**.
+Details and run commands: [verify/README.md](verify/README.md).
+
+**Research-data caveat:** the initial 50-stock analysis already inspected
+2021–2026 residual distributions, so this period cannot be described as a
+fully untouched model-design holdout. It remains possible to use its previously
+unexamined return outcomes for a carefully disclosed performance evaluation,
+but any eventual strategy claim needs an additional genuinely untouched
+confirmation sample.
