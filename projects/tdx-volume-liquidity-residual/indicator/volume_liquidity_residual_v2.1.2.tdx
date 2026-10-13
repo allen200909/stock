@@ -1,0 +1,251 @@
+{===============================================================}
+{ 量价流动性残差模型 V2.1.2 稳定实验版 — 通达信副图          }
+{===============================================================}
+
+{==================== 1. 参数 ====================}
+
+N:=60;
+ATRN:=14;
+VOLN:=20;
+
+ZTH:=1.50;
+
+RVVAC:=1.20;
+RVTH:=1.50;
+
+RVCAP:=3.00;
+MVCAP:=4.00;
+
+DTH:=0.25;
+ATH:=0.10;
+CTH:=0.10;
+
+COOL:=3;
+
+WDR:=0.50;
+WDB:=0.25;
+WCV:=0.25;
+
+
+{==================== 2. 基础波动 ====================}
+
+PC:=REF(C,1);
+
+TRX:=MAX(H-L,MAX(ABS(H-PC),ABS(L-PC)));
+
+ATR0:=SMA(TRX,ATRN,1);
+ATRB:=REF(ATR0,1);
+
+TROK:=ATRB>0.0001;
+
+MOV:=IF(TROK,TRX/ATRB,0);
+
+
+{==================== 3. 相对成交量 ====================}
+
+VM0:=MA(VOL,VOLN);
+VB:=REF(VM0,1);
+
+VOK:=VB>0;
+
+RVRAW:=IF(VOK,VOL/VB,1);
+
+
+{==================== 4. 训练样本稳健化 ====================}
+
+RVFIT:=MIN(RVRAW,RVCAP);
+MVFIT:=MIN(MOV,MVCAP);
+
+
+{==================== 5. 滞后滚动 OLS ====================}
+
+LX:=REF(RVFIT,1);
+LY:=REF(MVFIT,1);
+
+MX:=MA(LX,N);
+MY:=MA(LY,N);
+
+CXY:=MA(LX*LY,N)-MX*MY;
+
+VX:=MA(LX*LX,N)-MX*MX;
+VY:=MA(LY*LY,N)-MY*MY;
+
+REGK:=IF(VX>0.0001,MAX(CXY/VX,0),0);
+REGB:=MY-REGK*MX;
+
+
+{==================== 6. 当前样本预期波动 ====================}
+
+EP0:=REGB+REGK*RVFIT;
+EXPECT:=MAX(EP0,0);
+
+RES:=MOV-EXPECT;
+
+
+{==================== 7. 历史残差标准化 ====================}
+
+RM:=MA(REF(RES,1),N);
+RS:=STD(REF(RES,1),N);
+
+ZR:=IF(RS>0.0001,(RES-RM)/RS,0);
+
+
+{==================== 8. 模型质量 ====================}
+
+RHO:=IF(VX>0.0001 AND VY>0.0001,
+       CXY/SQRT(VX*VY),
+       0);
+
+R2RAW:=RHO*RHO;
+
+RPOS:=MAX(RHO,0);
+R2POS:=RPOS*RPOS;
+
+
+{==================== 9. 充分预热 ====================}
+
+WN:=2*N+MAX(ATRN,VOLN)+5;
+
+WARM:=BARSCOUNT(C)>WN;
+
+VALID:=WARM
+       AND TROK
+       AND VOK
+       AND RS>0.0001;
+
+Z:=IF(VALID,ZR,0);
+
+
+{==================== 10. 方向结构 ====================}
+
+TRB:=MAX(TRX,0.001);
+
+DR:=(C-PC)/TRB;
+DB:=(C-O)/TRB;
+
+CLV:=IF(H>L,(2*C-H-L)/(H-L),0);
+
+WS:=MAX(WDR+WDB+WCV,0.0001);
+
+DIR:=(WDR*DR+WDB*DB+WCV*CLV)/WS;
+
+
+{==================== 11. 正残差状态 ====================}
+
+VU0:=VALID
+     AND Z>ZTH
+     AND DIR>DTH
+     AND RVRAW<RVVAC;
+
+VD0:=VALID
+     AND Z>ZTH
+     AND DIR<-DTH
+     AND RVRAW<RVVAC;
+
+EU0:=VALID
+     AND Z>ZTH
+     AND DIR>DTH
+     AND RVRAW>=RVVAC;
+
+ED0:=VALID
+     AND Z>ZTH
+     AND DIR<-DTH
+     AND RVRAW>=RVVAC;
+
+
+{==================== 12. 负残差吸收状态 ====================}
+
+ABU0:=VALID
+      AND Z<-ZTH
+      AND RVRAW>RVTH
+      AND DIR>ATH
+      AND CLV>CTH;
+
+ABD0:=VALID
+      AND Z<-ZTH
+      AND RVRAW>RVTH
+      AND DIR<-ATH
+      AND CLV<-CTH;
+
+
+{==================== 13. 事件去重 ====================}
+
+VU:=VU0 AND COUNT(REF(VU0,1),COOL)=0;
+VD:=VD0 AND COUNT(REF(VD0,1),COOL)=0;
+
+EU:=EU0 AND COUNT(REF(EU0,1),COOL)=0;
+ED:=ED0 AND COUNT(REF(ED0,1),COOL)=0;
+
+ABU:=ABU0 AND COUNT(REF(ABU0,1),COOL)=0;
+ABD:=ABD0 AND COUNT(REF(ABD0,1),COOL)=0;
+
+
+{==================== 14. 副图基础输出 ====================}
+
+零轴:0,COLORGRAY;
+真空阈值:ZTH,DOTLINE,COLORRED;
+吸收阈值:-ZTH,DOTLINE,COLORGREEN;
+
+STICKLINE(Z>=0,0,Z,2,1),COLOR505050;
+STICKLINE(Z<0,0,Z,2,1),COLOR333333;
+
+
+{==================== 15. 状态高亮 ====================}
+
+STICKLINE(VU0,0,Z,2,0),COLORRED;
+STICKLINE(VD0,0,Z,2,0),COLORGREEN;
+
+STICKLINE(EU0,0,Z,2,0),COLORYELLOW;
+STICKLINE(ED0,0,Z,2,0),COLORBLUE;
+
+STICKLINE(ABU0,0,Z,2,0),COLORMAGENTA;
+STICKLINE(ABD0,0,Z,2,0),COLORCYAN;
+
+量价残差Z:Z,COLORWHITE,LINETHICK2;
+
+
+{==================== 16. 事件图标与文字 ====================}
+
+DRAWICON(VU,Z*1.10,1);
+DRAWTEXT(VU,Z*1.10,' 真空↑'),COLORRED;
+
+DRAWICON(VD,Z*1.10,2);
+DRAWTEXT(VD,Z*1.10,' 真空↓'),COLORGREEN;
+
+DRAWICON(EU,Z*1.10,1);
+DRAWTEXT(EU,Z*1.10,' 强扩↑'),COLORYELLOW;
+
+DRAWICON(ED,Z*1.10,2);
+DRAWTEXT(ED,Z*1.10,' 强扩↓'),COLORBLUE;
+
+DRAWICON(ABU,Z*1.10,38);
+DRAWTEXT(ABU,Z*1.10,' 吸收多'),COLORMAGENTA;
+
+DRAWICON(ABD,Z*1.10,39);
+DRAWTEXT(ABD,Z*1.10,' 吸收空'),COLORCYAN;
+
+
+{==================== 17. 调试与信号输出 ====================}
+
+真空多:VU,NODRAW;
+真空空:VD,NODRAW;
+
+量扩多:EU,NODRAW;
+量扩空:ED,NODRAW;
+
+吸收多:ABU,NODRAW;
+吸收空:ABD,NODRAW;
+
+模型RHO:RHO,NODRAW;
+原始R2:R2RAW,NODRAW;
+正向R2:R2POS,NODRAW;
+
+原始量比:RVRAW,NODRAW;
+预期波幅:EXPECT,NODRAW;
+实际波幅:MOV,NODRAW;
+
+方向值:DIR,NODRAW;
+CLV值:CLV,NODRAW;
+
+回归斜率:REGK,NODRAW;
+回归截距:REGB,NODRAW;
