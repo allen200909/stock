@@ -1,0 +1,84 @@
+{===============================================================}
+{ V2.1.2 — 强扩↑活跃度分层选股                               }
+{ 默认选出：健康活跃 ACTIVE 或 高活跃 HIGHACT                  }
+{===============================================================}
+N:=60; ATRN:=14; VOLN:=20;
+ZTH:=1.50; RVVAC:=1.20;
+RVCAP:=3.00; MVCAP:=4.00;
+DTH:=0.25; COOL:=3;
+WDR:=0.50; WDB:=0.25; WCV:=0.25;
+
+PC:=REF(C,1);
+TRX:=MAX(H-L,MAX(ABS(H-PC),ABS(L-PC)));
+ATR0:=SMA(TRX,ATRN,1);
+ATRB:=REF(ATR0,1);
+TROK:=ATRB>0.0001;
+MOV:=IF(TROK,TRX/ATRB,0);
+
+VM0:=MA(VOL,VOLN);
+VB:=REF(VM0,1);
+VOK:=VB>0;
+RVRAW:=IF(VOK,VOL/VB,1);
+
+RVFIT:=MIN(RVRAW,RVCAP);
+MVFIT:=MIN(MOV,MVCAP);
+
+LX:=REF(RVFIT,1);
+LY:=REF(MVFIT,1);
+MX:=MA(LX,N);
+MY:=MA(LY,N);
+CXY:=MA(LX*LY,N)-MX*MY;
+VX:=MA(LX*LX,N)-MX*MX;
+
+REGK:=IF(VX>0.0001,MAX(CXY/VX,0),0);
+REGB:=MY-REGK*MX;
+
+EXPECT:=MAX(REGB+REGK*RVFIT,0);
+RES:=MOV-EXPECT;
+
+RM:=MA(REF(RES,1),N);
+RS:=STD(REF(RES,1),N);
+ZR:=IF(RS>0.0001,(RES-RM)/RS,0);
+
+WN:=2*N+MAX(ATRN,VOLN)+5;
+WARM:=BARSCOUNT(C)>WN;
+VALID:=WARM AND TROK AND VOK AND RS>0.0001;
+Z:=IF(VALID,ZR,0);
+
+TRB:=MAX(TRX,0.001);
+DR:=(C-PC)/TRB;
+DB:=(C-O)/TRB;
+CLV:=IF(H>L,(2*C-H-L)/(H-L),0);
+WS:=MAX(WDR+WDB+WCV,0.0001);
+DIR:=(WDR*DR+WDB*DB+WCV*CLV)/WS;
+
+EU0:=VALID AND Z>ZTH AND DIR>DTH AND RVRAW>=RVVAC;
+EU:=EU0 AND COUNT(REF(EU0,1),COOL)=0;
+
+CNT60:=COUNT(EU,60);
+CNT20:=COUNT(EU,20);
+CNT10:=COUNT(EU,10);
+
+HOT:=CNT10>=3 OR CNT20>=4;
+
+QUIET:=CNT60<=1;
+WARMUP:=CNT60=2 AND CNT10>=1 AND NOT(HOT);
+
+ACTIVE:=CNT60>=3
+        AND CNT60<=4
+        AND CNT10>=1
+        AND CNT10<=2
+        AND NOT(HOT);
+
+HIGHACT:=CNT60>=5
+         AND CNT60<=6
+         AND CNT10>=1
+         AND CNT10<=2
+         AND NOT(HOT);
+
+LONGACT:=CNT60>=7
+         AND CNT10>=1
+         AND CNT10<=2
+         AND CNT20<=3;
+
+XG:ACTIVE OR HIGHACT;
