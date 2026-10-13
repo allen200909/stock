@@ -57,3 +57,12 @@
 - Validate dates, ticker identity and OHLCV integrity.
 - Correct previously inspected OOS labeling and overlapping-return inference guidance.
 - Add boundary regression tests; frozen TDX formulas are unchanged.
+
+## 2026-10-13 Accepted recommendations, second revision
+
+- Make full 21-series parity the default, retaining explicit legacy core scope.
+- Add a separate TDX export diagnostic without changing frozen baseline formulas.
+- Implement moving calendar-block bootstrap with sensitivity reports.
+- Add independent-event opening-price simulation with explicit costs and deferred exits.
+- Add write-once prospective confirmation registration and boundary regression tests.
+- Update optimization/acceptance record with implemented work and outstanding evidence.

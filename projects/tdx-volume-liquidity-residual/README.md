@@ -179,3 +179,12 @@ but any eventual strategy claim needs an additional genuinely untouched
 confirmation sample.
 
 优化执行记录与验收边界见 [优化建议与验收书](docs/optimization-and-acceptance-2026-10-13.md)。
+
+### Accepted recommendations implemented
+
+Research tools now include full 21-series parity, calendar-block bootstrap,
+opening-price event simulation with explicit costs and deferred exits, and
+prospective confirmation registration. See [usage and limitations](verify/README.md)
+and the [optimization/acceptance record](docs/optimization-and-acceptance-2026-10-13.md).
+These tools have synthetic regression coverage; authentic TDX parity, a real
+confirmation sample and profitability remain unverified.

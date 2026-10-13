@@ -14,15 +14,16 @@ Primary research question:
 
 No event study is considered valid until the Python implementation is matched against TongDaXin outputs bar-by-bar.
 
-Required exported TDX series:
+Required exported TDX series (full acceptance gate):
 
-- Z
-- EU
-- VU
-- ABU
-- RVRAW
-- DIR
-- RHO
+- Z, RVRAW, DIR, RHO;
+- EU, VU, ABU, ED, VD, ABD;
+- XG3, XG6010, XGLAYER;
+- QUIET, WARMUP, ACTIVE, HIGHACT, LONGACT, HOT, FADING, OTHER.
+
+Use `verify/tdx_full_export.tdx` for a separate diagnostic export.
+`--scope core` is only a legacy seven-series diagnostic, not full acceptance.
+Record real TDX software/data provenance and check compilation before export.
 
 Acceptance target:
 
@@ -176,3 +177,13 @@ Every result table must include:
 - sample count;
 - whether result is train, validation, or OOS.
 
+
+## 14. Implemented research tooling and remaining evidence
+
+`verify/inference.py` implements moving calendar-block bootstrap with block-size
+sensitivity. `verify/trade_study.py` provides independent-event open simulations,
+explicit cost assumptions, blocked-exit deferral and unresolved-outcome statuses.
+Neither supplies historical market data or proves executability from daily bars.
+`verify/confirmation.py` provides write-once future-sample registration; no actual
+untouched sample has been selected, registered or tested yet. See verify/README.md
+for input contracts and the distinction between software tests and real acceptance.

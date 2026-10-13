@@ -1,0 +1,245 @@
+{ Diagnostic export only; frozen baseline unchanged }
+{===============================================================}
+{ 量价流动性残差模型 V2.1.2 稳定实验版 — 通达信副图          }
+{===============================================================}
+
+{==================== 1. 参数 ====================}
+
+N:=60;
+ATRN:=14;
+VOLN:=20;
+
+ZTH:=1.50;
+
+RVVAC:=1.20;
+RVTH:=1.50;
+
+RVCAP:=3.00;
+MVCAP:=4.00;
+
+DTH:=0.25;
+ATH:=0.10;
+CTH:=0.10;
+
+COOL:=3;
+
+WDR:=0.50;
+WDB:=0.25;
+WCV:=0.25;
+
+
+{==================== 2. 基础波动 ====================}
+
+PC:=REF(C,1);
+
+TRX:=MAX(H-L,MAX(ABS(H-PC),ABS(L-PC)));
+
+ATR0:=SMA(TRX,ATRN,1);
+ATRB:=REF(ATR0,1);
+
+TROK:=ATRB>0.0001;
+
+MOV:=IF(TROK,TRX/ATRB,0);
+
+
+{==================== 3. 相对成交量 ====================}
+
+VM0:=MA(VOL,VOLN);
+VB:=REF(VM0,1);
+
+VOK:=VB>0;
+
+RVRAW:=IF(VOK,VOL/VB,1);
+
+
+{==================== 4. 训练样本稳健化 ====================}
+
+RVFIT:=MIN(RVRAW,RVCAP);
+MVFIT:=MIN(MOV,MVCAP);
+
+
+{==================== 5. 滞后滚动 OLS ====================}
+
+LX:=REF(RVFIT,1);
+LY:=REF(MVFIT,1);
+
+MX:=MA(LX,N);
+MY:=MA(LY,N);
+
+CXY:=MA(LX*LY,N)-MX*MY;
+
+VX:=MA(LX*LX,N)-MX*MX;
+VY:=MA(LY*LY,N)-MY*MY;
+
+REGK:=IF(VX>0.0001,MAX(CXY/VX,0),0);
+REGB:=MY-REGK*MX;
+
+
+{==================== 6. 当前样本预期波动 ====================}
+
+EP0:=REGB+REGK*RVFIT;
+EXPECT:=MAX(EP0,0);
+
+RES:=MOV-EXPECT;
+
+
+{==================== 7. 历史残差标准化 ====================}
+
+RM:=MA(REF(RES,1),N);
+RS:=STD(REF(RES,1),N);
+
+ZR:=IF(RS>0.0001,(RES-RM)/RS,0);
+
+
+{==================== 8. 模型质量 ====================}
+
+RHO:=IF(VX>0.0001 AND VY>0.0001,
+       CXY/SQRT(VX*VY),
+       0);
+
+R2RAW:=RHO*RHO;
+
+RPOS:=MAX(RHO,0);
+R2POS:=RPOS*RPOS;
+
+
+{==================== 9. 充分预热 ====================}
+
+WN:=2*N+MAX(ATRN,VOLN)+5;
+
+WARM:=BARSCOUNT(C)>WN;
+
+VALID:=WARM
+       AND TROK
+       AND VOK
+       AND RS>0.0001;
+
+Z:=IF(VALID,ZR,0);
+
+
+{==================== 10. 方向结构 ====================}
+
+TRB:=MAX(TRX,0.001);
+
+DR:=(C-PC)/TRB;
+DB:=(C-O)/TRB;
+
+CLV:=IF(H>L,(2*C-H-L)/(H-L),0);
+
+WS:=MAX(WDR+WDB+WCV,0.0001);
+
+DIR:=(WDR*DR+WDB*DB+WCV*CLV)/WS;
+
+
+{==================== 11. 正残差状态 ====================}
+
+VU0:=VALID
+     AND Z>ZTH
+     AND DIR>DTH
+     AND RVRAW<RVVAC;
+
+VD0:=VALID
+     AND Z>ZTH
+     AND DIR<-DTH
+     AND RVRAW<RVVAC;
+
+EU0:=VALID
+     AND Z>ZTH
+     AND DIR>DTH
+     AND RVRAW>=RVVAC;
+
+ED0:=VALID
+     AND Z>ZTH
+     AND DIR<-DTH
+     AND RVRAW>=RVVAC;
+
+
+{==================== 12. 负残差吸收状态 ====================}
+
+ABU0:=VALID
+      AND Z<-ZTH
+      AND RVRAW>RVTH
+      AND DIR>ATH
+      AND CLV>CTH;
+
+ABD0:=VALID
+      AND Z<-ZTH
+      AND RVRAW>RVTH
+      AND DIR<-ATH
+      AND CLV<-CTH;
+
+
+{==================== 13. 事件去重 ====================}
+
+VU:=VU0 AND COUNT(REF(VU0,1),COOL)=0;
+VD:=VD0 AND COUNT(REF(VD0,1),COOL)=0;
+
+EU:=EU0 AND COUNT(REF(EU0,1),COOL)=0;
+ED:=ED0 AND COUNT(REF(ED0,1),COOL)=0;
+
+ABU:=ABU0 AND COUNT(REF(ABU0,1),COOL)=0;
+ABD:=ABD0 AND COUNT(REF(ABD0,1),COOL)=0;
+
+
+CNT60:=COUNT(EU,60);
+CNT20:=COUNT(EU,20);
+CNT10:=COUNT(EU,10);
+
+HOT:=CNT10>=3 OR CNT20>=4;
+
+QUIET:=CNT60<=1 AND NOT(HOT);
+
+WARMUP:=CNT60=2
+        AND CNT10>=1
+        AND NOT(HOT);
+
+ACTIVE:=CNT60>=3
+        AND CNT60<=4
+        AND CNT10>=1
+        AND CNT10<=2
+        AND NOT(HOT);
+
+HIGHACT:=CNT60>=5
+         AND CNT60<=6
+         AND CNT10>=1
+         AND CNT10<=2
+         AND NOT(HOT);
+
+LONGACT:=CNT60>=7
+         AND CNT10>=1
+         AND CNT10<=2
+         AND CNT20<=3
+         AND NOT(HOT);
+
+FADING:=CNT60>=2
+        AND CNT10=0
+        AND NOT(HOT);
+
+OTHER:=NOT(QUIET OR WARMUP OR ACTIVE OR HIGHACT OR LONGACT OR HOT OR FADING);
+
+
+XG3:=COUNT(EU,3)>=1;
+XG6010:=CNT60>=3 AND CNT10>=1;
+XGLAYER:=ACTIVE OR HIGHACT;
+
+TDX_Z:Z,NODRAW;
+TDX_RVRAW:RVRAW,NODRAW;
+TDX_DIR:DIR,NODRAW;
+TDX_RHO:RHO,NODRAW;
+TDX_EU:EU,NODRAW;
+TDX_VU:VU,NODRAW;
+TDX_ABU:ABU,NODRAW;
+TDX_ED:ED,NODRAW;
+TDX_VD:VD,NODRAW;
+TDX_ABD:ABD,NODRAW;
+TDX_XG3:XG3,NODRAW;
+TDX_XG6010:XG6010,NODRAW;
+TDX_XGLAYER:XGLAYER,NODRAW;
+TDX_QUIET:QUIET,NODRAW;
+TDX_WARMUP:WARMUP,NODRAW;
+TDX_ACTIVE:ACTIVE,NODRAW;
+TDX_HIGHACT:HIGHACT,NODRAW;
+TDX_LONGACT:LONGACT,NODRAW;
+TDX_HOT:HOT,NODRAW;
+TDX_FADING:FADING,NODRAW;
+TDX_OTHER:OTHER,NODRAW;
