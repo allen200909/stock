@@ -1,0 +1,25 @@
+name: VLR verification (synthetic)
+
+on:
+  push:
+    paths:
+      - 'projects/tdx-volume-liquidity-residual/**'
+      - '.github/workflows/vlr-verification.yml'
+  pull_request:
+    paths:
+      - 'projects/tdx-volume-liquidity-residual/**'
+      - '.github/workflows/vlr-verification.yml'
+  workflow_dispatch:
+
+jobs:
+  structural-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install verification dependencies
+        run: pip install -r projects/tdx-volume-liquidity-residual/verify/requirements.txt
+      - name: Run deterministic structural tests
+        run: python -m unittest discover -s projects/tdx-volume-liquidity-residual/verify -p "test_*.py" -v
