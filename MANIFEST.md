@@ -1,0 +1,27 @@
+# Offline handoff manifest
+
+- `00_START_HERE_CARBON.md` — 1816 characters
+- `01_CARBON_OFFLINE_EXECUTION_PROMPT.md` — 2963 characters
+- `02_TASK_INDEX_AND_ACCEPTANCE.md` — 1340 characters
+- `03_INDEPENDENT_QA_REPORT.md` — 3138 characters
+- `04_SOURCE_AND_LICENSE_BOUNDARIES.md` — 670 characters
+- `docs/原始ClaudeCode任务说明.md` — 1019 characters
+- `docs/完整开发计划书.md` — 15417 characters
+- `project/mbv/adapters.py` — 491 characters
+- `project/mbv/aggregate.py` — 387 characters
+- `project/mbv/baselines.py` — 336 characters
+- `project/mbv/features.py` — 344 characters
+- `project/mbv/join.py` — 254 characters
+- `project/mbv/schema.py` — 570 characters
+- `project/README_LOG.md` — 355 characters
+- `project/requirements-dev.txt` — 62 characters
+- `project/tests/test_features.py` — 542 characters
+- `qa_known_defects_repro.py` — 2534 characters
+- `README.md` — 891 characters
+- `reference/BASELINE_CONTEXT.md` — 672 characters
+- `reference/third_party/NOTICE.md` — 1561 characters
+- `reference/third_party/Zeiierman_LTF_Volume_Microburst_Bubbles.pine` — 24408 characters
+- `reference/vlr_verify/inference.py` — 3070 characters
+- `reference/vlr_verify/requirements.txt` — 30 characters
+- `reference/vlr_verify/validation.py` — 1173 characters
+- `reference/vlr_verify/vlr.py` — 9421 characters
