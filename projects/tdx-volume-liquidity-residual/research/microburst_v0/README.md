@@ -1,5 +1,13 @@
 # MBV — VLR × Microburst Validation Layer (V0.1)
 
+## R6 状态（2026-11-12，分支 `feature/vlr-microburst-v0-r6`，未合并 master）
+
+- 源码基线：Carbon R5 ZIP（SHA-256 `10f9e12a…84991927`，28 条目）原样导入后增量完成 WP-A → WP-B → WP-C。
+- **pytest 90 passed / 0 failed，覆盖率 89%；`python run_demo.py` exit 0，输出非空 SYNTHETIC_DEMO 结果。T01–T20 自动化断言全部 PASS。**
+- 门禁：G1 **BLOCKED_REAL_DATA** · G2 **NOT_VERIFIED** · G3 **NOT_TESTED**。不得据此声称 alpha 或合并 master。
+- 详见 [R6 验收报告](reports/R6_ACCEPTANCE_REPORT.md)（基线复现、改动、T 编号→测试映射、覆盖率、哈希、复核命令）及原始日志 [reports/r6/](reports/r6/)。
+- 以下 R5 / 更早段落保留为历史记录（其中“旧版 WIP”警告指 R6 导入前的 GitHub 源码）。
+
 ## 新 Agent 接手入口（2026-11-11，R5 → R6）
 
 - [R5 已完成内容、剩余缺陷、T01–T20 矩阵、R6 执行步骤及验收门槛](AGENT_HANDOFF_R5_STATUS_AND_R6_PLAN_2026-11-11.md)

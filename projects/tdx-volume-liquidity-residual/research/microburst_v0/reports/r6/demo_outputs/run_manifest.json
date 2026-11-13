@@ -1,0 +1,158 @@
+{
+  "config": {
+    "baseline": {
+      "lookback_days": 20,
+      "method": "tod_median",
+      "min_history_days": 15,
+      "session_ema_span": 20
+    },
+    "burst": {
+      "body_eff_threshold": 0.1,
+      "dir_day_eps": 1e-06,
+      "ratio_cap_multiple": 10.0,
+      "rel_vol_threshold": 2.5,
+      "tick_size": 0.01
+    },
+    "data_contract": {
+      "adjustment": "unadjusted",
+      "amount_unit": "cny",
+      "exclude_closing_auction": false,
+      "frequency": "5min",
+      "min_slot_coverage": 0.95,
+      "reconciliation_tol": 0.02,
+      "timestamp_semantics": "bar_start",
+      "timezone": "Asia/Shanghai",
+      "volume_unit": "share"
+    },
+    "event_study": {
+      "board_policy": "strict",
+      "bootstrap_blocks": [
+        5,
+        10,
+        20
+      ],
+      "bootstrap_repetitions": 500,
+      "bootstrap_seed": 20261013,
+      "confidence": 0.95,
+      "horizons": [
+        1,
+        3,
+        5,
+        10,
+        20
+      ],
+      "matching_seed": 20261111,
+      "mbv_abs_dom_weak_cut": 0.25,
+      "mbv_dominance_cut": 0.25,
+      "mbv_share_cut": 0.15,
+      "min_events_per_group": 5,
+      "permutation_n": 1000,
+      "permutation_seed": 20261111,
+      "rvol_buckets": [
+        0.0,
+        1.2,
+        1.5,
+        2.2,
+        3.0,
+        100.0
+      ]
+    },
+    "study_mode": "SYNTHETIC_DEMO",
+    "version": "0.1.0",
+    "vlr_b0": {
+      "initial_tr": "hl",
+      "model": "B0"
+    }
+  },
+  "environment": {
+    "numpy": "2.4.6",
+    "pandas": "2.3.3",
+    "python": "3.11.2",
+    "pyyaml": "6.0.3"
+  },
+  "frozen_vlr_reference_sha256": {
+    "inference.py": "ed2243298785c93755f2a5cf20e5f9d930b544ce2e6523f9703508a07732bef1",
+    "validation.py": "bc647ac1e64753a1bc2af15525a755b9162f646acd99e299a475ee96cc5a12d3",
+    "vlr.py": "3dfba129c22282b3409a0d32f6781638b0699d8c1d2393e81a0cd8ec7b3f07b8"
+  },
+  "gates": {
+    "G0_code": "SEE reports/R6_ACCEPTANCE_REPORT.md",
+    "G1_real_minute_data": "BLOCKED_REAL_DATA",
+    "G2_tdx_b0_parity": "NOT_VERIFIED",
+    "G3_real_event_study": "NOT_TESTED"
+  },
+  "inputs_sha256": {
+    "calendar": "8987e9e3b6a88b4c330e84d5821d7e56565a0d54e74d33c5168113e49422a5ed",
+    "daily": "ee98dcf7b3cb214dd94116042c1a57ea52a46c609d641210fcecd23c1aae9186",
+    "minute": "296651877e3bec7663041a955862f272adae2d03e1ba8f7367e293ace5dd8aaf"
+  },
+  "mbv_code_sha256": {
+    "__init__.py": "d6d4805e314b9f93cc67e2e5914f695f96e6447549d8fe90ef8f49cdd6e61131",
+    "adapters.py": "0fe6ec71274cfca78e8a07bf554736586c63a5bb4fe8bfbe3423a5958903a49b",
+    "aggregate.py": "58bf5d2d9bb52c6282c14aa8f4f6da829546a257873189744202093d1e472d5f",
+    "baselines.py": "c86219d9e025448cb05b262969128b685e20978744b5a50462a13c9498db5267",
+    "cli.py": "76977dfc865e5cdf169aa3a893a3006021fd4100ef7b9c8246d713663e5b030d",
+    "event_study.py": "11d9c873ab14029a99c036b0a5b18ff148f86112517f4ec541ce8f29661c442e",
+    "features.py": "f73abdf49d16ddce0dc25ad4e099301a55dfd6b5c2c88355c827d4d2f552781f",
+    "join.py": "9b28cb894bc119568270d8ae5d884df9ada4d7440abba7be707a0f0533a55897",
+    "schema.py": "bff4987a443f8609557195d6921163270d1867c65b9c6fd9ba16d346cc8f4f91",
+    "sessions.py": "c214ba162fbbeffd14ec723698eea930b28082ae9546cd8a7cb205b5b719a52c"
+  },
+  "outputs_sha256": {
+    "bootstrap_summary": "c2e2f138e04b15e9d06211b1b2becf734b08a281100552845d2bd55d6eec9bff",
+    "forward_outcomes_labels": "3bade83a1de99437e8eaf68217e96820393519a71741169d1f44e538fab623e2",
+    "group_summary": "be9b99e1862875c13b9f9eb6d2edd593c2fa3d27f1e432c46401b0d4a80ac388",
+    "joined_vlr_mbv": "e3c718a4b74883f5c8c868e0b44adf3a96634e2a40507832314f108ca72d7b50",
+    "mbv_daily_features": "d3374ec0856b929a08c5a9c6198de43afcd2b55ca9bfeec4eb26d738004a7d4d",
+    "study_report": "bd2c524fc168fe0c2e7fed6bdd53e83a00ae3076717e92164687fad0d8a63c46"
+  },
+  "params_hash": "c1ec6ef314bdeaf2",
+  "study_mode": "SYNTHETIC_DEMO",
+  "summary": {
+    "b0_event_counts": {
+      "B0_ABD": 0,
+      "B0_ABU": 1,
+      "B0_ED": 0,
+      "B0_EU": 8,
+      "B0_VD": 0,
+      "B0_VU": 1
+    },
+    "burst_regime_counts": {
+      "BULL_DOMINATED_BURSTS": 9,
+      "ISOLATED_SINGLE_BURST": 5,
+      "NO_BURST": 69,
+      "TWO_WAY_OFFSETTING": 7,
+      "UNAVAILABLE": 45
+    },
+    "daily_rows": 510,
+    "joined_feature_status_counts": {
+      "INSUFFICIENT_HISTORY": 45,
+      "MISSING_MINUTE_DATA": 375,
+      "OK": 90
+    },
+    "joined_rows": 510,
+    "mbv_feature_status_counts": {
+      "INSUFFICIENT_HISTORY": 45,
+      "OK": 90
+    },
+    "mbv_rows": 135,
+    "minute_rows": 6480,
+    "ok_days_mean_burst_share": 0.052996782118997415,
+    "ok_days_with_bursts": 21,
+    "parquet": "WRITTEN",
+    "study_conclusion": "NO_RESEARCH_CONCLUSION: SYNTHETIC_DEMO output only exercises the code path; it is not evidence of MBV incremental value or alpha.",
+    "study_mode": "SYNTHETIC_DEMO",
+    "study_statuses": {
+      "board_policy": "strict",
+      "bootstrap": "OK",
+      "matched_control_h1": "INCONCLUSIVE",
+      "matched_control_h2": "INCONCLUSIVE",
+      "permutation_control_e": "COMPLETED"
+    },
+    "t1_fill_status_counts": {
+      "ELIGIBLE_T1_OPEN_HYPOTHETICAL": 507,
+      "PENDING_FUTURE_SESSION": 3
+    }
+  },
+  "synthetic_seed": 20261111
+}
