@@ -19,6 +19,12 @@ from mbv.schema import (
 
 # Expected SHA256 of the frozen reference vlr.py snapshot to guard immutability (T15)
 FROZEN_VLR_SHA256 = "3dfba129c22282b3409a0d32f6781638b0699d8c1d2393e81a0cd8ec7b3f07b8"
+# R6: all three read-only reference files; identical to projects/tdx-volume-liquidity-residual/verify/*.py
+FROZEN_REFERENCE_SHA256 = {
+    "vlr.py": FROZEN_VLR_SHA256,
+    "validation.py": "bc647ac1e64753a1bc2af15525a755b9162f646acd99e299a475ee96cc5a12d3",
+    "inference.py": "ed2243298785c93755f2a5cf20e5f9d930b544ce2e6523f9703508a07732bef1",
+}
 
 B0_COLUMN_MAP = {
     "Z": "B0_Z",
@@ -73,7 +79,20 @@ def verify_frozen_vlr_integrity(vlr_dir: Optional[str | Path] = None) -> dict[st
     return hashes
 
 
+def assert_frozen_vlr_integrity(vlr_dir: Optional[str | Path] = None) -> dict[str, str]:
+    """Fail closed (T15) unless the read-only B0 reference files match the frozen VLR V2.1.2 hashes exactly."""
+    hashes = verify_frozen_vlr_integrity(vlr_dir)
+    for fname, expected in FROZEN_REFERENCE_SHA256.items():
+        actual = hashes.get(fname)
+        if actual != expected:
+            raise DataContractError(
+                f"Frozen VLR reference integrity failure for {fname}: expected {expected}, got {actual}"
+            )
+    return hashes
+
+
 def _load_readonly_vlr_module(vlr_dir: Optional[str | Path] = None):
+    assert_frozen_vlr_integrity(vlr_dir)
     ref_dir = str(resolve_vlr_verify_dir(vlr_dir))
     if ref_dir not in sys.path:
         sys.path.insert(0, ref_dir)
@@ -106,7 +125,7 @@ def annotate_point_in_time_risk(df: pd.DataFrame) -> pd.DataFrame:
         prev_susp = (
             out.groupby("symbol", sort=False)["suspended"]
             .shift(1)
-            .fillna(False)
+            .map(lambda v: bool(v) if pd.notna(v) else False)
             .astype(bool)
         )
 
@@ -172,7 +191,7 @@ def compute_readonly_b0(
         grp = grp.sort_values("trade_date").reset_index(drop=True)
         susp_mask = grp["volume"] == 0.0
         if "suspended" in grp.columns:
-            susp_mask = susp_mask | grp["suspended"].fillna(False).astype(bool)
+            susp_mask = susp_mask | grp["suspended"].map(lambda v: bool(v) if pd.notna(v) else False).astype(bool)
 
         active = grp.loc[~susp_mask].copy().reset_index(drop=True)
         if not active.empty:
@@ -299,7 +318,7 @@ def join_daily_vlr_mbv(
     unmatched = merged["feature_status"].isna()
     merged.loc[unmatched, "feature_status"] = "MISSING_MINUTE_DATA"
     merged.loc[unmatched, "single_burst_flag"] = False
-    merged["single_burst_flag"] = merged["single_burst_flag"].fillna(False).astype(bool)
+    merged["single_burst_flag"] = merged["single_burst_flag"].map(lambda v: bool(v) if pd.notna(v) else False).astype(bool)
     merged.loc[unmatched, "vol_recon_status"] = "MISSING_MINUTE_DATA"
     merged.loc[unmatched, "burst_regime"] = "UNAVAILABLE"
 

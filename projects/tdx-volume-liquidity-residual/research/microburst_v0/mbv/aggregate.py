@@ -149,7 +149,7 @@ def _aggregate_one_session(
         "single_burst_flag": (n_bursts == 1), "burst_direction_agreement": agreement,
         "burst_signed_Bull_weight_share": bull_w, "burst_signed_Bear_weight_share": bear_w,
         "valid_slot_coverage": valid_slot_coverage, "baseline_slot_coverage": baseline_slot_coverage,
-        "minute_total_volume": total_day_minute_vol, "vol_recon_error": vol_recon_error,
+        "minute_total_volume": recon_vol, "vol_recon_error": vol_recon_error,
         "vol_recon_status": vol_recon_status, "burst_regime": _classify_regime(n_bursts, burst_share, dom, "OK"),
         "feature_status": "OK",
     }

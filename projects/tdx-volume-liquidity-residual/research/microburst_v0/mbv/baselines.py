@@ -1,16 +1,36 @@
 """Past-only rolling time-of-day (TOD) volume baseline and optional session EMA benchmark."""
 from __future__ import annotations
 
+from typing import Any, Optional
+
 import numpy as np
 import pandas as pd
 
-from mbv.schema import DataContractError, ensure_finite_numeric, ensure_nonmissing_symbol
+from mbv.schema import DataContractError, ensure_finite_numeric, ensure_nonmissing_symbol, normalize_trade_date
+
+
+def _normalize_calendar(trading_calendar: Any) -> list[str]:
+    """Validate an explicit exchange calendar (sorted, unique, non-empty) and return 'YYYY-MM-DD' strings."""
+    if isinstance(trading_calendar, pd.DataFrame):
+        if "trade_date" not in trading_calendar.columns:
+            raise DataContractError("Calendar DataFrame must contain 'trade_date' column")
+        raw = trading_calendar["trade_date"]
+    else:
+        raw = pd.Series(list(trading_calendar))
+    if raw.empty:
+        raise DataContractError("trading_calendar must not be empty")
+    norm = normalize_trade_date(raw.reset_index(drop=True), "trading_calendar")
+    if norm.duplicated().any() or not norm.is_monotonic_increasing:
+        raise DataContractError("trading_calendar must be sorted and unique")
+    return norm.tolist()
 
 
 def build_tod_baseline(
     df: pd.DataFrame,
     lookback_days: int = 20,
     min_history_days: int = 15,
+    *,
+    trading_calendar: Optional[Any] = None,
 ) -> pd.DataFrame:
     """Compute past-only rolling time-of-day median volume baseline per `(symbol, trade_date, time_slot)`.
 
@@ -24,6 +44,9 @@ def build_tod_baseline(
     - Requires `positive_history_days >= min_history_days` (default 15, including 15..19 when fewer
       than 20 total sessions exist). Otherwise `baseline = NaN` and `baseline_status = 'INSUFFICIENT_HISTORY'`.
     - Fails closed if duplicate `(symbol, trade_date, time_slot)` rows exist (never silently sums).
+    - R6: optional `trading_calendar` (explicit exchange sessions). When supplied, the window steps on exchange
+      sessions, so sessions missing from the data still consume a window step (no stretching of the window
+      across long gaps); minute sessions outside the calendar raise `DataContractError`.
     """
     if lookback_days < 1 or min_history_days < 1 or min_history_days > lookback_days:
         raise DataContractError(
@@ -67,9 +90,22 @@ def build_tod_baseline(
 
     # Build symbol-level session calendar from present trading dates so missing/zero slots on a session
     # still occupy a session step in the 20-session lookback window rather than pulling stale dates >20 sessions old.
+    cal_dates: Optional[list[str]] = None
+    if trading_calendar is not None:
+        cal_dates = _normalize_calendar(trading_calendar)
+        outside = sorted(set(work["trade_date"].unique()) - set(cal_dates))
+        if outside:
+            raise DataContractError(
+                f"Minute sessions outside trading_calendar: {outside[:5]}{'...' if len(outside) > 5 else ''}"
+            )
+
     out_parts: list[pd.DataFrame] = []
     for symbol, sym_df in work.groupby("symbol", sort=False):
         sym_dates = sorted(sym_df["trade_date"].unique())
+        if cal_dates is not None:
+            first, last = sym_dates[0], sym_dates[-1]
+            # Exchange sessions between first/last observation: missing sessions still consume a window step.
+            sym_dates = [d for d in cal_dates if first <= d <= last]
         slots = sorted(sym_df["time_slot"].unique())
 
         piv = sym_df.pivot(index="trade_date", columns="time_slot", values="volume").reindex(

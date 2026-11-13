@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -20,9 +21,18 @@ from mbv.aggregate import aggregate_daily_features
 from mbv.baselines import build_tod_baseline, compute_session_ema_benchmark
 from mbv.event_study import format_study_markdown_report, run_event_study
 from mbv.features import detect_bursts
-from mbv.join import compute_readonly_b0, join_daily_vlr_mbv, verify_frozen_vlr_integrity
-from mbv.schema import DataContractError, compute_dataframe_hash, compute_params_hash
-from mbv.sessions import expected_slot_count
+from mbv.join import (
+    assert_frozen_vlr_integrity,
+    compute_readonly_b0,
+    join_daily_vlr_mbv,
+)
+from mbv.schema import (
+    DataContractError,
+    assert_no_future_columns,
+    compute_dataframe_hash,
+    compute_params_hash,
+)
+from mbv.sessions import expected_slot_count, validate_minute_bars
 
 
 def load_config(config_path: Optional[str | Path] = None) -> dict[str, Any]:
@@ -45,8 +55,21 @@ def compute_mbv_daily_pipeline(
     *,
     config: Optional[dict[str, Any]] = None,
     daily_ref: Optional[pd.DataFrame] = None,
+    trading_calendar: Optional[Any] = None,
 ) -> pd.DataFrame:
-    """End-to-end causal pipeline: validated minute bars -> past-only TOD baseline -> bursts -> daily features."""
+    """End-to-end causal pipeline: validated minute bars -> past-only TOD baseline -> bursts -> daily features.
+
+    Input contract (WP-B): ``minute_df`` must already be in **normalized `bar_start` semantics with volume in
+    shares** (i.e. the output of :func:`mbv.sessions.validate_minute_bars` / :func:`mbv.adapters.load_minute_bars`).
+    The pipeline re-validates it here with ``semantics='bar_start'`` and ``volume_unit='share'`` (idempotent on
+    normalized data) at the configured frequency, so raw or unvalidated bars (lunch-break / off-grid / bar_end
+    boundary bars, bad OHLC, negative or non-finite volume, duplicate keys) fail closed with
+    :class:`DataContractError` instead of entering the main chain. Raw `bar_end` sources must be normalized upstream
+    via ``load_minute_bars(..., semantics='bar_end')``.
+
+    ``trading_calendar`` (optional, ordered unique exchange sessions) makes the 20-session baseline window step on
+    the exchange calendar rather than on sessions present in the data, so missing sessions occupy a window step.
+    """
     cfg = config or {}
     dc = cfg.get("data_contract", {})
     bc = cfg.get("baseline", {})
@@ -67,8 +90,19 @@ def compute_mbv_daily_pipeline(
     cap_mult = float(fc.get("ratio_cap_multiple", 10.0))
     dir_eps = float(fc.get("dir_day_eps", 1e-6))
 
+    minute_df = validate_minute_bars(
+        minute_df,
+        semantics="bar_start",
+        frequency=freq,
+        tz=dc.get("timezone", "Asia/Shanghai"),
+        volume_unit="share",
+        amount_unit="cny",
+    )
+
     if method == "tod_median":
-        base_df = build_tod_baseline(minute_df, lookback_days=lookback, min_history_days=min_hist)
+        base_df = build_tod_baseline(
+            minute_df, lookback_days=lookback, min_history_days=min_hist, trading_calendar=trading_calendar
+        )
     elif method == "session_ema":
         span = int(bc.get("session_ema_span", 20))
         base_df = compute_session_ema_benchmark(minute_df, span=span, min_periods=min(10, span))
@@ -96,6 +130,7 @@ def compute_mbv_daily_pipeline(
         reconciliation_tol=recon_tol,
         dir_day_eps=dir_eps,
     )
+    assert_no_future_columns(daily_features)
     return daily_features
 
 
@@ -149,7 +184,8 @@ def cmd_compute_features(args: argparse.Namespace) -> int:
         amount_unit=dc.get("amount_unit", "cny"),
         adjustment=dc.get("adjustment", "unadjusted"),
     )
-    feat_df = compute_mbv_daily_pipeline(min_df, config=cfg)
+    cal_df = _read_table(args.calendar) if getattr(args, "calendar", None) else None
+    feat_df = compute_mbv_daily_pipeline(min_df, config=cfg, trading_calendar=cal_df)
     out_p = write_table(feat_df, args.out)
     print(f"Wrote {len(feat_df)} daily MBV rows to {out_p}")
     return 0
@@ -246,46 +282,151 @@ def run_synthetic_demo_workflow(
 
     min_df, meta = load_minute_bars(min_csv, frequency="5min", semantics="bar_start", source="SYNTHETIC_DEMO")
     day_df = load_daily_bars(day_csv)
+    vlr_hashes = assert_frozen_vlr_integrity()
     b0_df = compute_readonly_b0(day_df)
-    mbv_df = compute_mbv_daily_pipeline(min_df, config=cfg, daily_ref=b0_df)
+    mbv_df = compute_mbv_daily_pipeline(
+        min_df, config=cfg, daily_ref=b0_df, trading_calendar=bundle["calendar"]
+    )
     joined_df = join_daily_vlr_mbv(
         b0_df,
         mbv_df,
         source_hash=meta.source_hash,
         params_hash=compute_params_hash(cfg),
+        reconciliation_tol=float(cfg.get("data_contract", {}).get("reconciliation_tol", 0.02)),
+        dir_day_eps=float(cfg.get("burst", {}).get("dir_day_eps", 1e-6)),
     )
+    # Invariant: T-day confirmed B0 records must neither disappear nor duplicate through the join.
+    if len(joined_df) != len(b0_df):
+        raise DataContractError("Joined table row count differs from B0 table")
+    for ev in ("B0_EU", "B0_ABU", "B0_VU", "B0_ED", "B0_ABD", "B0_VD"):
+        if ev in b0_df.columns and int(joined_df[ev].astype(bool).sum()) != int(b0_df[ev].astype(bool).sum()):
+            raise DataContractError(f"B0 event count changed through join for {ev}")
 
-    mbv_out = out_dir / "mbv_daily_features.csv"
-    joined_out = out_dir / "joined_vlr_mbv.csv"
-    mbv_df.to_csv(mbv_out, index=False)
-    joined_df.to_csv(joined_out, index=False)
+    outputs: dict[str, Path] = {
+        "mbv_daily_features": out_dir / "mbv_daily_features.csv",
+        "joined_vlr_mbv": out_dir / "joined_vlr_mbv.csv",
+    }
+    mbv_df.to_csv(outputs["mbv_daily_features"], index=False)
+    joined_df.to_csv(outputs["joined_vlr_mbv"], index=False)
 
+    ec = cfg.get("event_study", {})
     study_res = run_event_study(
         joined_df,
         trading_calendar=bundle["calendar"],
         study_mode="SYNTHETIC_DEMO",
-        horizons=[1, 3, 5, 10, 20],
-        min_events_per_group=3,
-        bootstrap_repetitions=200,
+        horizons=ec.get("horizons", [1, 3, 5, 10, 20]),
+        min_events_per_group=int(ec.get("min_events_per_group", 5)),
+        mbv_share_cut=float(ec.get("mbv_share_cut", 0.15)),
+        mbv_dominance_cut=float(ec.get("mbv_dominance_cut", 0.25)),
+        mbv_abs_dom_weak_cut=float(ec.get("mbv_abs_dom_weak_cut", 0.25)),
+        rvol_buckets=ec.get("rvol_buckets", [0.0, 1.2, 1.5, 2.2, 3.0, 100.0]),
+        bootstrap_blocks=ec.get("bootstrap_blocks", [5, 10, 20]),
+        bootstrap_repetitions=int(ec.get("bootstrap_repetitions", 500)),
+        bootstrap_seed=int(ec.get("bootstrap_seed", 20261013)),
+        confidence=float(ec.get("confidence", 0.95)),
     )
-    study_res["group_summary"].to_csv(out_dir / "group_summary.csv", index=False)
-    study_res["outcomes_table"].to_csv(out_dir / "forward_outcomes_labels.csv", index=False)
+    outputs["group_summary"] = out_dir / "group_summary.csv"
+    outputs["forward_outcomes_labels"] = out_dir / "forward_outcomes_labels.csv"
+    study_res["group_summary"].to_csv(outputs["group_summary"], index=False)
+    study_res["outcomes_table"].to_csv(outputs["forward_outcomes_labels"], index=False)
     if not study_res["bootstrap_table"].empty:
-        study_res["bootstrap_table"].to_csv(out_dir / "bootstrap_summary.csv", index=False)
+        outputs["bootstrap_summary"] = out_dir / "bootstrap_summary.csv"
+        study_res["bootstrap_table"].to_csv(outputs["bootstrap_summary"], index=False)
     report_md = format_study_markdown_report(study_res)
     report_path = out_dir / "study_report.md"
     report_path.write_text(report_md, encoding="utf-8")
+    outputs["study_report"] = report_path
 
-    vlr_hashes = verify_frozen_vlr_integrity()
-    return {
+    parquet_status = "WRITTEN"
+    try:
+        mbv_df.to_parquet(out_dir / "mbv_daily_features.parquet", index=False)
+        joined_df.to_parquet(out_dir / "joined_vlr_mbv.parquet", index=False)
+    except ImportError:
+        parquet_status = "SKIPPED_NO_PARQUET_ENGINE"
+
+    ok_mask = mbv_df["feature_status"] == "OK"
+    summary = {
         "study_mode": "SYNTHETIC_DEMO",
-        "minute_rows": len(min_df),
-        "daily_rows": len(day_df),
-        "mbv_rows": len(mbv_df),
-        "joined_rows": len(joined_df),
+        "minute_rows": int(len(min_df)),
+        "daily_rows": int(len(day_df)),
+        "mbv_rows": int(len(mbv_df)),
+        "joined_rows": int(len(joined_df)),
+        "mbv_feature_status_counts": {k: int(v) for k, v in mbv_df["feature_status"].value_counts().items()},
+        "joined_feature_status_counts": {k: int(v) for k, v in joined_df["feature_status"].value_counts().items()},
+        "burst_regime_counts": {k: int(v) for k, v in mbv_df["burst_regime"].value_counts().items()},
+        "ok_days_with_bursts": int((mbv_df.loc[ok_mask, "burst_count"] > 0).sum()),
+        "ok_days_mean_burst_share": float(mbv_df.loc[ok_mask, "burst_share"].mean()) if ok_mask.any() else None,
+        "b0_event_counts": {
+            ev: int(joined_df[ev].astype(bool).sum())
+            for ev in ("B0_EU", "B0_ABU", "B0_VU", "B0_ED", "B0_ABD", "B0_VD") if ev in joined_df.columns
+        },
+        "parquet": parquet_status,
+    }
+    manifest = build_run_manifest(
+        cfg=cfg,
+        inputs={"minute": min_csv, "daily": day_csv, "calendar": cal_csv},
+        outputs=outputs,
+        vlr_hashes=vlr_hashes,
+        summary=summary,
+        seed=20261111,
+    )
+    manifest_path = out_dir / "run_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+
+    return {
+        **summary,
         "feature_status_counts": study_res["feature_status_counts"],
         "vlr_reference_hashes": vlr_hashes,
         "report_path": str(report_path),
+        "manifest_path": str(manifest_path),
+    }
+
+
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def build_run_manifest(
+    *,
+    cfg: dict[str, Any],
+    inputs: dict[str, Path],
+    outputs: dict[str, Path],
+    vlr_hashes: dict[str, str],
+    summary: dict[str, Any],
+    seed: int,
+) -> dict[str, Any]:
+    """Reproducibility manifest: config/params hash, input & output SHA-256, MBV code hashes, environment.
+
+    Deliberately excludes wall-clock timestamps so that two runs with identical code/config/seed produce a
+    byte-identical manifest.
+    """
+    import numpy as _np
+    import platform
+
+    pkg_root = Path(__file__).resolve().parent
+    code_hashes = {p.name: _sha256_file(p) for p in sorted(pkg_root.glob("*.py"))}
+    return {
+        "study_mode": "SYNTHETIC_DEMO",
+        "synthetic_seed": seed,
+        "config": cfg,
+        "params_hash": compute_params_hash(cfg),
+        "inputs_sha256": {k: _sha256_file(v) for k, v in inputs.items()},
+        "outputs_sha256": {k: _sha256_file(v) for k, v in outputs.items()},
+        "mbv_code_sha256": code_hashes,
+        "frozen_vlr_reference_sha256": vlr_hashes,
+        "environment": {
+            "python": platform.python_version(),
+            "pandas": pd.__version__,
+            "numpy": _np.__version__,
+            "pyyaml": getattr(yaml, "__version__", "unknown"),
+        },
+        "summary": summary,
+        "gates": {
+            "G0_code": "SEE reports/R6_ACCEPTANCE_REPORT.md",
+            "G1_real_minute_data": "BLOCKED_REAL_DATA",
+            "G2_tdx_b0_parity": "NOT_VERIFIED",
+            "G3_real_event_study": "NOT_TESTED",
+        },
     }
 
 
@@ -316,6 +457,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_feat.add_argument("--minute", required=True, help="Path to minute CSV/Parquet")
     p_feat.add_argument("--config", default=None, help="Path to YAML config")
     p_feat.add_argument("--out", required=True, help="Output CSV/Parquet path")
+    p_feat.add_argument(
+        "--calendar", default=None,
+        help="Optional exchange trading calendar CSV/Parquet (trade_date); baseline window steps on it",
+    )
     p_feat.set_defaults(func=cmd_compute_features)
 
     p_join = sub.add_parser("join-vlr", help="Compute read-only B0 and left-join daily MBV features")
