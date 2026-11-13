@@ -27,6 +27,9 @@ DAILY_OPTIONAL_STATE_COLS = (
     "listing_age_sessions",
     "price_limit_status",
     "corp_action_flag",
+    # R7: point-in-time status is trusted only with a declared, non-synthetic data source
+    "trading_restricted",
+    "tradability_status_source",
 )
 
 MBV_DAILY_FEATURE_COLS = (
@@ -48,7 +51,7 @@ MBV_DAILY_FEATURE_COLS = (
     "feature_status",
 )
 
-FORBIDDEN_FUTURE_PREFIXES = ("fwd_ret", "forward_return", "future_ret", "mfe_", "mae_", "next_ret")
+FORBIDDEN_FUTURE_PREFIXES = ("fwd_ret", "forward_return", "future_ret", "mfe_", "mae_", "next_ret", "exec_ret")
 
 
 @dataclass(frozen=True)

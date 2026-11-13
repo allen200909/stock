@@ -8,6 +8,7 @@ import pytest
 
 from _helpers import bdays, make_panel, slot_index
 from mbv.baselines import build_tod_baseline
+from mbv.calendar_policy import calendar_fingerprint
 from mbv.cli import compute_mbv_daily_pipeline
 from mbv.features import detect_bursts
 from mbv.schema import DataContractError
@@ -93,7 +94,13 @@ def test_t02_multi_symbol_multi_date_end_to_end_prefix_invariance(use_calendar):
         cal_t = pd.DataFrame({"trade_date": dates[: cut + 1]}) if use_calendar else None
         daily_t = compute_mbv_daily_pipeline(trunc, trading_calendar=cal_t)
         prefix = daily_full.loc[daily_full["trade_date"] <= cutoff].reset_index(drop=True)
-        pd.testing.assert_frame_equal(prefix, daily_t, check_exact=True)  # values, statuses, flags, dtypes
+        # R7: calendar_sha256 stamps the supplied calendar (truncated here), so it is checked separately
+        pd.testing.assert_frame_equal(prefix.drop(columns=["calendar_sha256"]),
+                                      daily_t.drop(columns=["calendar_sha256"]), check_exact=True)
+        if use_calendar:
+            assert set(daily_t["calendar_sha256"]) == {calendar_fingerprint(dates[: cut + 1])}
+        else:
+            assert daily_t["calendar_sha256"].isna().all()
 
         bars_t = detect_bursts(trunc, build_tod_baseline(trunc, trading_calendar=cal_t))
         cols = ["symbol", "trade_date", "time_slot", "baseline", "rel_vol", "is_burst", "baseline_status",

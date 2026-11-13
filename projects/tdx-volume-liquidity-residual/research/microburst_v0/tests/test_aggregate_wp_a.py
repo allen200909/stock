@@ -25,7 +25,10 @@ def test_public_aggregate_full_schema_types_and_unique_keys():
     dates = bdays(22)
     panel = make_panel(["600000.SH", "000001.SZ"], dates, lambda s, d, k: 1000.0 + 7 * k)
     out = compute_mbv_daily_pipeline(panel)
-    assert list(out.columns) == list(AGG_OUTPUT_COLS)
+    assert list(out.columns) == list(AGG_OUTPUT_COLS) + ["calendar_kind", "calendar_sha256"]
+    # R7: synthetic run without calendar is explicitly labelled, never silently treated as exchange calendar
+    assert (out["calendar_kind"] == "NONE_SYMBOL_OBSERVED_DATES").all()
+    assert out["calendar_sha256"].isna().all()
     assert len(out) == 2 * 22
     assert not out.duplicated(["symbol", "trade_date"]).any()
     assert out["symbol"].notna().all() and out["trade_date"].notna().all()

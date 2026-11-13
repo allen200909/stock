@@ -100,6 +100,14 @@ def _load_readonly_vlr_module(vlr_dir: Optional[str | Path] = None):
     return vlr
 
 
+def _trusted_source(row: pd.Series) -> bool:
+    """R7: status columns count only with a declared, non-synthetic ``tradability_status_source``."""
+    if "tradability_status_source" not in row.index or pd.isna(row["tradability_status_source"]):
+        return False
+    src = str(row["tradability_status_source"]).strip()
+    return bool(src) and not src.upper().startswith("SYNTHETIC")
+
+
 def annotate_point_in_time_risk(df: pd.DataFrame) -> pd.DataFrame:
     """Separate research factor preservation from point-in-time tradability & corporate-action flags (T13).
 
@@ -158,6 +166,9 @@ def annotate_point_in_time_risk(df: pd.DataFrame) -> pd.DataFrame:
         elif "ONE_WORD_LOCKED" in tags or limit_val in ("LOCKED_UP", "LOCKED_DOWN", "LIMIT_UP", "LIMIT_DOWN"):
             elig = "LIMIT_RESTRICTED"
         elif not (has_susp and has_st and has_limit):
+            elig = "TRADABILITY_UNVERIFIED"
+        elif not _trusted_source(row):
+            # R7: status columns without a declared, non-synthetic source are not trusted
             elig = "TRADABILITY_UNVERIFIED"
         else:
             elig = "ELIGIBLE_FOR_T1_FILL_CHECK"

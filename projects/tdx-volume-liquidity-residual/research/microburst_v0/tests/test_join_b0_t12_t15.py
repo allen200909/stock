@@ -115,10 +115,13 @@ def test_t13_point_in_time_risk_tags_and_eligibility():
         {"trade_date": "2026-01-08", "suspended": False, "st_flag": False, "price_limit_status": "NONE",
          "corp_action_flag": False, "listing_age_sessions": 6},
     ])
+    df["tradability_status_source"] = ["EXCHANGE_STATUS_FEED_TEST", None, None, "SYNTHETIC_GENERATOR"]
     out = annotate_point_in_time_risk(df).set_index("trade_date")
     f = out["data_risk_flags"].str.split("|")
     assert set(f["2026-01-05"]) == {"IPO_WINDOW"}
     assert out.loc["2026-01-05", "execution_eligibility"] == "ELIGIBLE_FOR_T1_FILL_CHECK"
+    # R7: complete status columns but synthetic / missing source -> never ELIGIBLE
+    assert out.loc["2026-01-08", "execution_eligibility"] == "TRADABILITY_UNVERIFIED"
     assert {"SUSPENDED", "ZERO_DAILY_VOLUME", "ONE_WORD_LOCKED", "IPO_WINDOW"} <= set(f["2026-01-06"])
     assert out.loc["2026-01-06", "execution_eligibility"] == "UNTRADABLE_SUSPENDED"
     assert {"RESUMED_FROM_SUSPENSION", "ST_RISK", "CORP_ACTION_DAY", "IPO_WINDOW", "LIMIT_UP",

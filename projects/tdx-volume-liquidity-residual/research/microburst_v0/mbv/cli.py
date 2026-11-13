@@ -19,6 +19,12 @@ from mbv.adapters import (
 )
 from mbv.aggregate import aggregate_daily_features
 from mbv.baselines import build_tod_baseline, compute_session_ema_benchmark
+from mbv.calendar_policy import (
+    assert_dates_in_preregistered_window,
+    load_json_record,
+    resolve_study_context,
+    synthetic_calendar_provenance,
+)
 from mbv.event_study import format_study_markdown_report, run_event_study
 from mbv.features import detect_bursts
 from mbv.join import (
@@ -77,6 +83,9 @@ def compute_mbv_daily_pipeline(
     config: Optional[dict[str, Any]] = None,
     daily_ref: Optional[pd.DataFrame] = None,
     trading_calendar: Optional[Any] = None,
+    study_mode: Optional[str] = None,
+    calendar_provenance: Optional[dict[str, Any]] = None,
+    preregistration: Optional[dict[str, Any]] = None,
 ) -> pd.DataFrame:
     """End-to-end causal pipeline: validated minute bars -> past-only TOD baseline -> bursts -> daily features.
 
@@ -88,10 +97,21 @@ def compute_mbv_daily_pipeline(
     :class:`DataContractError` instead of entering the main chain. Raw `bar_end` sources must be normalized upstream
     via ``load_minute_bars(..., semantics='bar_end')``.
 
-    ``trading_calendar`` (optional, ordered unique exchange sessions) makes the 20-session baseline window step on
+    ``trading_calendar`` (ordered unique exchange sessions) makes the 20-session baseline window step on
     the exchange calendar rather than on sessions present in the data, so missing sessions occupy a window step.
+
+    R7 calendar policy (:mod:`mbv.calendar_policy`): ``study_mode`` (default ``config['study_mode']`` or
+    ``SYNTHETIC_DEMO``) decides whether the calendar is optional (synthetic only, explicitly labelled
+    ``NONE_SYMBOL_OBSERVED_DATES``) or mandatory with verified provenance (``EXPLORATORY_REAL_DATA``,
+    ``CONFIRMATORY_OOS`` + pre-registration). Output rows carry ``calendar_kind`` and ``calendar_sha256`` so the
+    event study can verify that features and outcomes used the same calendar.
     """
     cfg = config or {}
+    mode = study_mode or cfg.get("study_mode", "SYNTHETIC_DEMO")
+    ctx = resolve_study_context(
+        mode, trading_calendar, calendar_provenance=calendar_provenance, preregistration=preregistration,
+        require_calendar=False,
+    )
     dc = cfg.get("data_contract", {})
     bc = cfg.get("baseline", {})
     fc = cfg.get("burst", {})
@@ -119,10 +139,11 @@ def compute_mbv_daily_pipeline(
         volume_unit="share",
         amount_unit="cny",
     )
+    assert_dates_in_preregistered_window(ctx, minute_df["trade_date"], allow_warmup=True)
 
     if method == "tod_median":
         base_df = build_tod_baseline(
-            minute_df, lookback_days=lookback, min_history_days=min_hist, trading_calendar=trading_calendar
+            minute_df, lookback_days=lookback, min_history_days=min_hist, trading_calendar=ctx.calendar
         )
     elif method == "session_ema":
         span = int(bc.get("session_ema_span", 20))
@@ -151,6 +172,9 @@ def compute_mbv_daily_pipeline(
         reconciliation_tol=recon_tol,
         dir_day_eps=dir_eps,
     )
+    daily_features["calendar_kind"] = ctx.calendar_kind
+    daily_features["calendar_sha256"] = ctx.calendar_sha256 if ctx.calendar_sha256 else pd.NA
+    daily_features["calendar_sha256"] = daily_features["calendar_sha256"].astype("string")
     assert_no_future_columns(daily_features)
     return daily_features
 
@@ -206,10 +230,21 @@ def cmd_compute_features(args: argparse.Namespace) -> int:
         adjustment=dc.get("adjustment", "unadjusted"),
     )
     cal_df = _read_table(args.calendar) if getattr(args, "calendar", None) else None
-    feat_df = compute_mbv_daily_pipeline(min_df, config=cfg, trading_calendar=cal_df)
+    feat_df = compute_mbv_daily_pipeline(
+        min_df,
+        config=cfg,
+        trading_calendar=cal_df,
+        study_mode=_cli_study_mode(args, cfg),
+        calendar_provenance=load_json_record(getattr(args, "calendar_provenance", None)),
+        preregistration=load_json_record(getattr(args, "preregistration", None)),
+    )
     out_p = write_table(feat_df, args.out)
     print(f"Wrote {len(feat_df)} daily MBV rows to {out_p}")
     return 0
+
+
+def _cli_study_mode(args: argparse.Namespace, cfg: dict[str, Any]) -> str:
+    return getattr(args, "study_mode", None) or cfg.get("study_mode", "SYNTHETIC_DEMO")
 
 
 def cmd_join_vlr(args: argparse.Namespace) -> int:
@@ -242,12 +277,16 @@ def cmd_study(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     joined_df = _read_table(args.joined)
     cal_df = _read_table(args.calendar)
+    evidence = _read_table(args.execution_evidence) if getattr(args, "execution_evidence", None) else None
 
-    study_mode = cfg.get("study_mode", "SYNTHETIC_DEMO")
+    study_mode = _cli_study_mode(args, cfg)
     res = run_event_study(
         joined_df,
         trading_calendar=cal_df,
         study_mode=study_mode,
+        calendar_provenance=load_json_record(getattr(args, "calendar_provenance", None)),
+        preregistration=load_json_record(getattr(args, "preregistration", None)),
+        execution_evidence=evidence,
         **event_study_kwargs(cfg),
     )
 
@@ -295,8 +334,13 @@ def run_synthetic_demo_workflow(
     day_df = load_daily_bars(day_csv)
     vlr_hashes = assert_frozen_vlr_integrity()
     b0_df = compute_readonly_b0(day_df)
+    cal_prov = synthetic_calendar_provenance(
+        bundle["calendar"]["trade_date"].tolist(),
+        source="mbv.adapters.generate_synthetic_market_bundle(seed=20261111, n_sessions=170)",
+    )
     mbv_df = compute_mbv_daily_pipeline(
-        min_df, config=cfg, daily_ref=b0_df, trading_calendar=bundle["calendar"]
+        min_df, config=cfg, daily_ref=b0_df, trading_calendar=bundle["calendar"],
+        study_mode="SYNTHETIC_DEMO", calendar_provenance=cal_prov,
     )
     joined_df = join_daily_vlr_mbv(
         b0_df,
@@ -324,6 +368,7 @@ def run_synthetic_demo_workflow(
         joined_df,
         trading_calendar=bundle["calendar"],
         study_mode="SYNTHETIC_DEMO",
+        calendar_provenance=cal_prov,
         **event_study_kwargs(cfg),
     )
     outputs["group_summary"] = out_dir / "group_summary.csv"
@@ -348,6 +393,7 @@ def run_synthetic_demo_workflow(
     ok_mask = mbv_df["feature_status"] == "OK"
     summary = {
         "study_mode": "SYNTHETIC_DEMO",
+        "study_context": study_res["study_context"],
         "minute_rows": int(len(min_df)),
         "daily_rows": int(len(day_df)),
         "mbv_rows": int(len(mbv_df)),
@@ -371,6 +417,7 @@ def run_synthetic_demo_workflow(
             "board_policy": study_res["matched_control_h1"]["board_policy"],
         },
         "t1_fill_status_counts": study_res["t1_fill_status_counts"],
+        "t1_execution_class_counts": study_res["t1_execution_class_counts"],
     }
     manifest = build_run_manifest(
         cfg=cfg,
@@ -450,6 +497,17 @@ def cmd_demo(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_policy_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--study-mode", default=None, choices=["SYNTHETIC_DEMO", "EXPLORATORY_REAL_DATA",
+                                                           "CONFIRMATORY_OOS"],
+                   help="Overrides config study_mode")
+    p.add_argument("--calendar-provenance", default=None,
+                   help="JSON: kind=EXCHANGE, source, verified=true, verified_by, calendar_sha256 (formal modes)")
+    p.add_argument("--preregistration", default=None,
+                   help="JSON: registry_id, registered_on, sample_start, sample_end, data_source, document_path, "
+                        "document_sha256 (CONFIRMATORY_OOS)")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mbv.cli",
@@ -469,8 +527,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_feat.add_argument("--out", required=True, help="Output CSV/Parquet path")
     p_feat.add_argument(
         "--calendar", default=None,
-        help="Optional exchange trading calendar CSV/Parquet (trade_date); baseline window steps on it",
+        help="Exchange trading calendar CSV/Parquet (trade_date); mandatory outside SYNTHETIC_DEMO",
     )
+    _add_policy_args(p_feat)
     p_feat.set_defaults(func=cmd_compute_features)
 
     p_join = sub.add_parser("join-vlr", help="Compute read-only B0 and left-join daily MBV features")
@@ -485,6 +544,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_study.add_argument("--calendar", required=True, help="Path to explicit trading calendar CSV/Parquet")
     p_study.add_argument("--config", default=None, help="Path to YAML config")
     p_study.add_argument("--outdir", required=True, help="Directory for study outputs")
+    p_study.add_argument(
+        "--execution-evidence", default=None,
+        help="Optional order / order-book evidence CSV (symbol, entry_date, evidence_type, fill_status, "
+             "fill_price, evidence_source)",
+    )
+    _add_policy_args(p_study)
     p_study.set_defaults(func=cmd_study)
 
     p_demo = sub.add_parser("demo", help="Generate deterministic synthetic data and run full SYNTHETIC_DEMO")

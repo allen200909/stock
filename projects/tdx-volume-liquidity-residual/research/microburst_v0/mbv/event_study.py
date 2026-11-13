@@ -11,6 +11,14 @@ R6 (WP-C) changes on top of Carbon R5:
   without status columns rows are labelled ``TRADABILITY_UNVERIFIED_T1`` (hypothetical return only).
 - Bootstrap reports seed, block-length sensitivity, dropped long blocks and events dropped for missing returns.
 - Study result carries an explicit research ``conclusion`` and gate status; synthetic output is never evidence.
+
+R7 (design decisions 2026-11-12):
+- Study mode / exchange calendar / pre-registration are resolved by ``mbv.calendar_policy.resolve_study_context``;
+  formal modes require a verified exchange calendar bound by SHA-256 to the MBV feature stamps.
+- T+1 classification no longer treats ``LIMIT_UP + open>=high`` as proof of an unfilled order
+  (``OPEN_LIMIT_UP_FILL_UNVERIFIED_T1``); status is trusted only with ``tradability_status_source``; actual
+  unfilled / filled requires order or order-book evidence. Hypothetical returns (``fwd_ret_*``) and
+  confirmed-executable returns (``exec_ret_*``) are stored separately.
 """
 from __future__ import annotations
 
@@ -21,11 +29,14 @@ from typing import Any, Optional, Sequence
 import numpy as np
 import pandas as pd
 
+from mbv.calendar_policy import (
+    VALID_STUDY_LABELS,
+    assert_dates_in_preregistered_window,
+    assert_feature_calendar_consistent,
+    resolve_study_context,
+)
 from mbv.join import resolve_vlr_verify_dir
 from mbv.schema import DataContractError, assert_no_future_columns, normalize_trade_date
-
-
-VALID_STUDY_LABELS = ("SYNTHETIC_DEMO", "EXPLORATORY_REAL_DATA", "CONFIRMATORY_OOS")
 VALID_BOARD_POLICIES = ("strict", "relax_explicit", "ignore")
 
 # Gate status that no offline/synthetic run can upgrade (handoff §3 WP-D / §6).
@@ -68,26 +79,137 @@ def validate_trading_calendar(trading_calendar: Optional[Sequence[Any] | pd.Seri
     return norm.tolist()
 
 
-def _t1_tradability(t1_row: pd.Series) -> tuple[str, bool]:
-    """Classify T+1 open executability from point-in-time status columns (never from OHLC guesses alone).
+RETURN_BASIS_HYPOTHETICAL = "HYPOTHETICAL_T1_OPEN_PRICE"
 
-    Returns ``(fill_status, returns_allowed)``.
+# R7: T+1 fill status -> execution class. Hypothetical (T+1 open price) returns are kept for factor research on
+# every class except NO_DATA and status-confirmed non-executable sessions; ``exec_ret_*`` (confirmed-executable
+# return statistics) is populated ONLY for CONFIRMED_FILLED and STATUS_CHECKED_EXECUTABLE rows.
+T1_STATUS_CLASS = {
+    "PENDING_FUTURE_SESSION": "NO_DATA",
+    "DATA_MISSING": "NO_DATA",
+    "SUSPENDED_T1_STATUS_CONFIRMED": "NOT_EXECUTABLE_CONFIRMED",
+    "TRADING_RESTRICTED_T1_STATUS_CONFIRMED": "NOT_EXECUTABLE_CONFIRMED",
+    "ZERO_VOLUME_T1": "NOT_EXECUTABLE_CONFIRMED",
+    "UNFILLED_T1_ORDER_EVIDENCE": "NOT_EXECUTABLE_CONFIRMED",
+    "OPEN_LIMIT_UP_FILL_UNVERIFIED_T1": "FILL_UNVERIFIED",
+    "TRADABILITY_UNVERIFIED_T1": "FILL_UNVERIFIED",
+    "ELIGIBLE_T1_OPEN_STATUS_CHECKED": "STATUS_CHECKED_EXECUTABLE",
+    "FILLED_T1_ORDER_EVIDENCE": "CONFIRMED_FILLED",
+}
+EXECUTABLE_CLASSES = ("CONFIRMED_FILLED", "STATUS_CHECKED_EXECUTABLE")
+_NO_HYPOTHETICAL_RETURN = ("PENDING_FUTURE_SESSION", "DATA_MISSING", "SUSPENDED_T1_STATUS_CONFIRMED",
+                           "TRADING_RESTRICTED_T1_STATUS_CONFIRMED", "ZERO_VOLUME_T1")
+EVIDENCE_TYPES = ("ORDER", "ORDER_BOOK")
+EVIDENCE_FILL_STATUSES = ("FILLED", "NOT_FILLED")
+EVIDENCE_REQUIRED_COLS = ("symbol", "entry_date", "evidence_type", "fill_status", "fill_price", "evidence_source")
+
+
+def _flag(row: pd.Series, col: str) -> Optional[bool]:
+    """Tri-state status value: None when the column is absent / NaN."""
+    if col not in row.index or pd.isna(row[col]):
+        return None
+    return bool(row[col])
+
+
+def trusted_status_source(row: pd.Series) -> Optional[str]:
+    """Point-in-time status columns are trusted only with a declared, non-synthetic ``tradability_status_source``."""
+    if "tradability_status_source" not in row.index or pd.isna(row["tradability_status_source"]):
+        return None
+    src = str(row["tradability_status_source"]).strip()
+    if not src or src.upper().startswith("SYNTHETIC"):
+        return None
+    return src
+
+
+def validate_execution_evidence(evidence: Optional[pd.DataFrame]) -> dict[tuple[str, str], dict[str, Any]]:
+    """Order / order-book evidence table -> {(symbol, entry_date): record}. Fail-closed on any ambiguity."""
+    if evidence is None:
+        return {}
+    missing = [c for c in EVIDENCE_REQUIRED_COLS if c not in evidence.columns]
+    if missing:
+        raise DataContractError(f"Execution evidence missing columns {missing}")
+    if evidence.empty:
+        return {}
+    ev = evidence.copy()
+    ev["symbol"] = ev["symbol"].astype(str).str.strip()
+    ev["entry_date"] = normalize_trade_date(ev["entry_date"].reset_index(drop=True), "entry_date").to_numpy()
+    if ev.duplicated(subset=["symbol", "entry_date"]).any():
+        raise DataContractError("Duplicate (symbol, entry_date) keys in execution evidence")
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    for _, r in ev.iterrows():
+        etype = str(r["evidence_type"]).strip().upper()
+        fstat = str(r["fill_status"]).strip().upper()
+        src = "" if pd.isna(r["evidence_source"]) else str(r["evidence_source"]).strip()
+        if etype not in EVIDENCE_TYPES:
+            raise DataContractError(f"evidence_type must be one of {EVIDENCE_TYPES}, got {r['evidence_type']!r}")
+        if fstat not in EVIDENCE_FILL_STATUSES:
+            raise DataContractError(f"fill_status must be one of {EVIDENCE_FILL_STATUSES}, got {r['fill_status']!r}")
+        if not src:
+            raise DataContractError("evidence_source must be non-empty for every execution evidence row")
+        price = pd.to_numeric(pd.Series([r["fill_price"]]), errors="coerce").iloc[0]
+        if fstat == "FILLED" and not (pd.notna(price) and float(price) > 0.0):
+            raise DataContractError("FILLED execution evidence requires a positive fill_price")
+        out[(r["symbol"], r["entry_date"])] = {
+            "evidence_type": etype, "fill_status": fstat, "evidence_source": src,
+            "fill_price": float(price) if pd.notna(price) else np.nan,
+        }
+    return out
+
+
+def _t1_tradability(t1_row: pd.Series, evidence: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """Classify T+1 open executability (R7). ``LIMIT_UP + open>=high`` is a conservative exclusion only.
+
+    Returns dict(fill_status, status_source, evidence_source, risk_flags, fill_price).
     """
     t1_vol = float(t1_row["volume"])
-    suspended = "suspended" in t1_row.index and pd.notna(t1_row["suspended"]) and bool(t1_row["suspended"])
-    if suspended or t1_vol <= 0.0:
-        return "UNFILLED_SUSPENDED_T1", False
+    src = trusted_status_source(t1_row)
+    suspended = _flag(t1_row, "suspended")
+    restricted = _flag(t1_row, "trading_restricted")
+    lim = (str(t1_row["price_limit_status"]).upper()
+           if "price_limit_status" in t1_row.index and pd.notna(t1_row["price_limit_status"]) else None)
+    open_at_limit_up = lim in T1_LIMIT_UP_TOKENS and float(t1_row["open"]) >= float(t1_row["high"])
+    flags: list[str] = []
     if float(t1_row["high"]) == float(t1_row["low"]):
-        return "UNFILLED_LOCKED_T1", False
-    has_limit = "price_limit_status" in t1_row.index and pd.notna(t1_row["price_limit_status"])
-    if has_limit:
-        lim = str(t1_row["price_limit_status"]).upper()
-        if lim in T1_LIMIT_UP_TOKENS and float(t1_row["open"]) >= float(t1_row["high"]):
-            # opened at the limit-up price: a buy order at T+1 open cannot be assumed filled
-            return "UNFILLED_LIMIT_UP_T1", False
-    if has_limit and "suspended" in t1_row.index and pd.notna(t1_row["suspended"]):
-        return "ELIGIBLE_T1_OPEN_HYPOTHETICAL", True
-    return "TRADABILITY_UNVERIFIED_T1", True
+        flags.append("ONE_WORD_LOCKED")
+    if open_at_limit_up:
+        flags.append("OPEN_AT_LIMIT_UP")
+    raw_src = ("" if "tradability_status_source" not in t1_row.index or pd.isna(t1_row["tradability_status_source"])
+               else str(t1_row["tradability_status_source"]).strip())
+
+    def _res(status: str, status_source: str, ev_src: Optional[str] = None, price: float = np.nan) -> dict[str, Any]:
+        return {"fill_status": status, "status_source": status_source, "evidence_source": ev_src,
+                "risk_flags": "|".join(flags) if flags else "NONE", "fill_price": price}
+
+    if evidence is not None:
+        if evidence["fill_status"] == "FILLED" and (t1_vol <= 0.0 or (src is not None and (suspended or restricted))):
+            raise DataContractError(
+                "FILLED execution evidence contradicts confirmed suspension / restriction / zero volume on "
+                f"{t1_row.name}"
+            )
+        ev_status_source = f"ORDER_EVIDENCE:{evidence['evidence_type']}"
+        if evidence["fill_status"] == "FILLED":
+            return _res("FILLED_T1_ORDER_EVIDENCE", ev_status_source, evidence["evidence_source"],
+                        evidence["fill_price"])
+        return _res("UNFILLED_T1_ORDER_EVIDENCE", ev_status_source, evidence["evidence_source"])
+
+    if src is not None and suspended:
+        return _res("SUSPENDED_T1_STATUS_CONFIRMED", src)
+    if src is not None and restricted:
+        return _res("TRADING_RESTRICTED_T1_STATUS_CONFIRMED", src)
+    if t1_vol <= 0.0:
+        return _res("ZERO_VOLUME_T1", "DAILY_VOLUME")
+    if src is None:
+        flags.append("NO_TRUSTED_STATUS_SOURCE" if not raw_src else "UNTRUSTED_STATUS_SOURCE")
+        if suspended:
+            flags.append("SUSPENDED_FLAG_UNTRUSTED")
+        return _res("TRADABILITY_UNVERIFIED_T1", raw_src or "NONE")
+    if open_at_limit_up:
+        # conservative exclusion: an opening limit-up does NOT prove an order went unfilled
+        return _res("OPEN_LIMIT_UP_FILL_UNVERIFIED_T1", src)
+    if suspended is None or lim is None:
+        flags.append("STATUS_INCOMPLETE")
+        return _res("TRADABILITY_UNVERIFIED_T1", src)
+    return _res("ELIGIBLE_T1_OPEN_STATUS_CHECKED", src)
 
 
 def build_forward_outcome_labels(
@@ -95,23 +217,25 @@ def build_forward_outcome_labels(
     *,
     trading_calendar: Optional[Sequence[Any] | pd.Series | pd.DataFrame],
     horizons: Sequence[int] = (1, 3, 5, 10, 20),
+    execution_evidence: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """Construct separate T+1 earliest-entry forward outcome table (never mutates T-day feature table, T17).
 
     Entry convention (RFC Section 6.2):
     - Signal is confirmed at T close; earliest hypothetical entry is T+1 open (`entry_price = open_{T+1}`).
-    - If T+1 is absent, suspended (`volume == 0`), or locked (`high == low` on T+1), `fill_status`
-      is recorded (`DATA_MISSING`, `UNFILLED_SUSPENDED`, `UNFILLED_LOCKED_T1`) and returns are `NaN`.
-    - R6: T+1 opening at limit-up per point-in-time ``price_limit_status`` -> `UNFILLED_LIMIT_UP_T1` (NaN returns);
-      without status columns the row is `TRADABILITY_UNVERIFIED_T1` (hypothetical return, not a fill claim);
-      with status columns and no restriction -> `ELIGIBLE_T1_OPEN_HYPOTHETICAL`.
-    - For horizon `h` in `horizons`, exit session is calendar index `idx(T) + h` (so `h=1` measures
-      `close_{T+1} / open_{T+1} - 1`, `h=5` measures `close_{T+5} / open_{T+1} - 1`, etc.), plus
-      `mfe_{h}d` (`max(high_{T+1..T+h}) / open_{T+1} - 1`) and `mae_{h}d` (`min(low_{T+1..T+h}) / open_{T+1} - 1`).
+    - For horizon `h`, exit session is calendar index `idx(T) + h` (`h=1` measures `close_{T+1}/open_{T+1}-1`),
+      plus `mfe_{h}d` / `mae_{h}d` from the T+1..T+h high/low path.
+    - R7: every row carries `t1_fill_status`, `t1_execution_class`, `t1_status_source`,
+      `t1_fill_evidence_source`, `t1_risk_flags`, `return_basis`. `fwd_ret/mfe/mae` are HYPOTHETICAL T+1 open
+      price returns (factor research) and are NaN only for NO_DATA and status-confirmed non-executable sessions.
+      `exec_ret_{h}d` (confirmed-executable statistics) is filled only for `FILLED_T1_ORDER_EVIDENCE` (entry =
+      evidence fill price) and `ELIGIBLE_T1_OPEN_STATUS_CHECKED` (entry = T+1 open); never for FILL_UNVERIFIED.
     """
     assert_no_future_columns(joined_df)
     cal = validate_trading_calendar(trading_calendar)
     cal_pos = {d: i for i, d in enumerate(cal)}
+    evidence_map = validate_execution_evidence(execution_evidence)
+    used_evidence: set[tuple[str, str]] = set()
 
     required = {"symbol", "trade_date", "open", "high", "low", "close", "volume"}
     missing = required.difference(joined_df.columns)
@@ -131,6 +255,18 @@ def build_forward_outcome_labels(
             rec[f"fwd_ret_{h}d"] = np.nan
             rec[f"mfe_{h}d"] = np.nan
             rec[f"mae_{h}d"] = np.nan
+            rec[f"exec_ret_{h}d"] = np.nan
+
+    def _base(rec: dict[str, Any], status: str, status_source: str = "NONE", ev_src: Optional[str] = None,
+              flags: str = "NONE") -> None:
+        rec["t1_fill_status"] = status
+        rec["t1_execution_class"] = T1_STATUS_CLASS[status]
+        rec["t1_status_source"] = status_source
+        rec["t1_fill_evidence_source"] = ev_src
+        rec["t1_risk_flags"] = flags
+        rec["return_basis"] = RETURN_BASIS_HYPOTHETICAL
+        rec["exec_entry_basis"] = None
+        rec["exec_entry_price"] = np.nan
 
     out_parts: list[pd.DataFrame] = []
     for symbol, grp in work.groupby("symbol", sort=True):
@@ -145,7 +281,7 @@ def build_forward_outcome_labels(
 
             if t_idx + 1 >= len(cal):
                 rec["t1_date"] = None
-                rec["t1_fill_status"] = "PENDING_FUTURE_SESSION"
+                _base(rec, "PENDING_FUTURE_SESSION")
                 _nan_horizons(rec)
                 rows.append(rec)
                 continue
@@ -153,44 +289,60 @@ def build_forward_outcome_labels(
             t1_date = cal[t_idx + 1]
             rec["t1_date"] = t1_date
             if t1_date not in by_date.index:
-                rec["t1_fill_status"] = "DATA_MISSING"
+                _base(rec, "DATA_MISSING")
                 _nan_horizons(rec)
                 rows.append(rec)
                 continue
 
             t1_row = by_date.loc[t1_date]
-            status, returns_allowed = _t1_tradability(t1_row)
-            rec["t1_fill_status"] = status
-            if not returns_allowed:
+            ev_key = (str(symbol), t1_date)
+            ev = evidence_map.get(ev_key)
+            if ev is not None:
+                used_evidence.add(ev_key)
+            res = _t1_tradability(t1_row, ev)
+            status = res["fill_status"]
+            _base(rec, status, res["status_source"], res["evidence_source"], res["risk_flags"])
+            if status in _NO_HYPOTHETICAL_RETURN:
                 _nan_horizons(rec)
                 rows.append(rec)
                 continue
 
+            exec_class = T1_STATUS_CLASS[status]
+            if exec_class == "CONFIRMED_FILLED":
+                exec_entry = float(res["fill_price"])
+                rec["exec_entry_basis"] = "ORDER_EVIDENCE_FILL_PRICE"
+            elif exec_class == "STATUS_CHECKED_EXECUTABLE":
+                exec_entry = float(t1_row["open"])
+                rec["exec_entry_basis"] = "STATUS_CHECKED_T1_OPEN"
+            else:
+                exec_entry = np.nan
+            rec["exec_entry_price"] = exec_entry
+
             t1_open = float(t1_row["open"])
             for h in horizons:
                 end_idx = t_idx + int(h)
-                if end_idx >= len(cal):
+                win_dates = cal[t_idx + 1: end_idx + 1] if end_idx < len(cal) else None
+                if win_dates is None or not all(d in by_date.index for d in win_dates):
                     rec[f"fwd_ret_{h}d"] = np.nan
                     rec[f"mfe_{h}d"] = np.nan
                     rec[f"mae_{h}d"] = np.nan
-                    continue
-                win_dates = cal[t_idx + 1 : end_idx + 1]
-                if not all(d in by_date.index for d in win_dates):
-                    rec[f"fwd_ret_{h}d"] = np.nan
-                    rec[f"mfe_{h}d"] = np.nan
-                    rec[f"mae_{h}d"] = np.nan
+                    rec[f"exec_ret_{h}d"] = np.nan
                     continue
                 win_slice = by_date.loc[win_dates]
                 exit_close = float(win_slice["close"].iloc[-1])
-                max_high = float(win_slice["high"].max())
-                min_low = float(win_slice["low"].min())
                 rec[f"fwd_ret_{h}d"] = exit_close / t1_open - 1.0
-                rec[f"mfe_{h}d"] = max_high / t1_open - 1.0
-                rec[f"mae_{h}d"] = min_low / t1_open - 1.0
+                rec[f"mfe_{h}d"] = float(win_slice["high"].max()) / t1_open - 1.0
+                rec[f"mae_{h}d"] = float(win_slice["low"].min()) / t1_open - 1.0
+                rec[f"exec_ret_{h}d"] = exit_close / exec_entry - 1.0 if pd.notna(exec_entry) else np.nan
 
             rows.append(rec)
         out_parts.append(pd.DataFrame(rows))
 
+    unmatched = sorted(set(evidence_map) - used_evidence)
+    if unmatched:
+        raise DataContractError(
+            f"Execution evidence does not match any available T+1 entry session: {unmatched[:3]}"
+        )
     return pd.concat(out_parts, ignore_index=True)
 
 
@@ -471,6 +623,9 @@ def run_event_study(
     matching_seed: int = 20261111,
     permutation_n: int = 1000,
     permutation_seed: int = 20261111,
+    calendar_provenance: Optional[dict[str, Any]] = None,
+    preregistration: Optional[dict[str, Any]] = None,
+    execution_evidence: Optional[pd.DataFrame] = None,
 ) -> dict[str, Any]:
     """Execute the 5-arm pre-registered research evaluation (Groups A–E) with strict status reporting.
 
@@ -480,6 +635,9 @@ def run_event_study(
       matched control diagnostics (Group D), permutation negative control (Group E), and calendar
       block bootstrap where event coverage permits.
     - R6: explicit ``conclusion`` (never an alpha claim for synthetic / unverified data) and ``gates``.
+    - R7: ``resolve_study_context`` (formal modes: verified exchange calendar + provenance; OOS: pre-registration),
+      MBV feature ``calendar_sha256`` must equal the study calendar, OOS trade dates must lie in the registered
+      window, and confirmed-executable return statistics (``exec_*``) exclude FILL_UNVERIFIED rows.
     """
     if study_mode not in VALID_STUDY_LABELS:
         raise DataContractError(f"Invalid study_mode '{study_mode}'; must be one of {VALID_STUDY_LABELS}")
@@ -490,9 +648,13 @@ def run_event_study(
     cal_list = validate_trading_calendar(trading_calendar)
     if "feature_status" not in joined_df.columns:
         raise DataContractError("Joined table lacks required 'feature_status' column")
+    ctx = resolve_study_context(study_mode, cal_list, calendar_provenance=calendar_provenance,
+                                preregistration=preregistration, require_calendar=True)
+    assert_feature_calendar_consistent(ctx, joined_df)
+    assert_dates_in_preregistered_window(ctx, joined_df["trade_date"], allow_warmup=False)
 
     outcomes = build_forward_outcome_labels(
-        joined_df, trading_calendar=cal_list, horizons=horizons
+        joined_df, trading_calendar=cal_list, horizons=horizons, execution_evidence=execution_evidence
     )
     study_df = pd.merge(
         joined_df.assign(trade_date=normalize_trade_date(joined_df["trade_date"], "trade_date")),
@@ -541,11 +703,17 @@ def run_event_study(
             else:
                 mean_ret = med_ret = win_rate = mean_mfe = mean_mae = np.nan
 
+            exec_col = f"exec_ret_{h}d"
+            exec_vals = sub[exec_col].dropna().to_numpy(dtype=float) if exec_col in sub.columns else np.array([])
+            n_unverified = int((sub["t1_execution_class"] == "FILL_UNVERIFIED").sum()) \
+                if "t1_execution_class" in sub.columns else 0
+
             summary_rows.append({
                 "study_mode": study_mode,
                 "group": g_name,
                 "horizon_days": int(h),
                 "raw_events": n_raw,
+                "return_basis": RETURN_BASIS_HYPOTHETICAL,
                 "effective_events": n_eff,
                 "dropped_missing_return": n_raw - n_eff,
                 "mean_return": mean_ret,
@@ -553,6 +721,9 @@ def run_event_study(
                 "win_rate": win_rate,
                 "mean_mfe": mean_mfe,
                 "mean_mae": mean_mae,
+                "fill_unverified_events": n_unverified,
+                "exec_effective_events": int(len(exec_vals)),
+                "exec_mean_return": float(np.mean(exec_vals)) if len(exec_vals) else np.nan,
                 "group_status": status,
             })
 
@@ -643,6 +814,7 @@ def run_event_study(
 
     feature_status_counts = {str(k): int(v) for k, v in study_df["feature_status"].value_counts(dropna=False).items()}
     fill_status_counts = {str(k): int(v) for k, v in study_df["t1_fill_status"].value_counts(dropna=False).items()}
+    exec_class_counts = {str(k): int(v) for k, v in study_df["t1_execution_class"].value_counts(dropna=False).items()}
 
     if study_mode == "SYNTHETIC_DEMO":
         conclusion = ("NO_RESEARCH_CONCLUSION: SYNTHETIC_DEMO output only exercises the code path; "
@@ -656,7 +828,8 @@ def run_event_study(
 
     return {
         "study_mode": study_mode,
-        "research_grade": "PROVISIONAL_RESEARCH" if study_mode != "SYNTHETIC_DEMO" else "SYNTHETIC_DEMO_ONLY",
+        "research_grade": ctx.research_grade,
+        "study_context": ctx.describe(),
         "vlr_parity_status": "TDX_PARITY_NOT_VERIFIED",
         "conclusion": conclusion,
         "gates": dict(GATE_STATUS),
@@ -664,6 +837,7 @@ def run_event_study(
         "total_panel_rows": len(study_df),
         "feature_status_counts": feature_status_counts,
         "t1_fill_status_counts": fill_status_counts,
+        "t1_execution_class_counts": exec_class_counts,
         "group_summary": summary_df,
         "matched_control_h1": d_h1,
         "matched_control_h2": d_h2,
@@ -694,11 +868,18 @@ def format_study_markdown_report(study_result: dict[str, Any]) -> str:
         "## 0. Gates",
         *[f"- `{k}`: `{v}`" for k, v in gates.items()],
         "",
+        "## 0b. Study Context (calendar / pre-registration)",
+        f"- **Study Context**: `{study_result.get('study_context', {})}`",
+        "",
         "## 1. Sample Coverage & Attrition",
         f"- **Evaluation Calendar Sessions**: `{study_result['calendar_sessions']}`",
         f"- **Total Daily Panel Rows**: `{study_result['total_panel_rows']}`",
         f"- **MBV `feature_status` Counts**: `{study_result['feature_status_counts']}`",
         f"- **T+1 `fill_status` Counts**: `{study_result['t1_fill_status_counts']}`",
+        f"- **T+1 `execution_class` Counts**: `{study_result.get('t1_execution_class_counts', {})}`",
+        "- **Return basis**: `fwd_ret_*` / `mean_return` are HYPOTHETICAL T+1 open-price returns (factor research) "
+        "and are NOT fill returns. `exec_*` statistics include only CONFIRMED_FILLED (order evidence) and "
+        "STATUS_CHECKED_EXECUTABLE rows; FILL_UNVERIFIED rows (incl. OPEN_LIMIT_UP_FILL_UNVERIFIED_T1) are excluded.",
         "",
         "## 2. Matched & Permutation Controls (Groups D & E)",
         f"- **H1 Matched Control (Same-Date + RVOL Bucket + board policy)**: `{study_result['matched_control_h1']}`",

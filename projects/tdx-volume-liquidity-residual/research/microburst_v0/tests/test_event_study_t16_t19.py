@@ -118,7 +118,8 @@ def test_t17_t1_tradability_states_are_distinct_and_never_inferred_from_ohlc_alo
     def extra(df):
         df["suspended"] = False
         df["price_limit_status"] = "NONE"
-        # T+1 for dates[0] opens locked at limit-up but trades (high > low) -> cannot assume a buy fill
+        df["tradability_status_source"] = "EXCHANGE_STATUS_FEED_TEST"
+        # T+1 for dates[0] opens at limit-up but trades (high > low) -> fill opportunity UNVERIFIED (R7)
         m = df["trade_date"] == dates[1]
         df.loc[m, ["open", "high", "low", "close", "price_limit_status"]] = [11.0, 11.0, 10.6, 10.9, "LIMIT_UP"]
         m2 = df["trade_date"] == dates[3]
@@ -127,10 +128,14 @@ def test_t17_t1_tradability_states_are_distinct_and_never_inferred_from_ohlc_alo
 
     with_status = _joined(["600000.SH"], dates, extra=extra)
     out = build_forward_outcome_labels(with_status, trading_calendar=dates, horizons=(1,)).set_index("trade_date")
-    assert out.loc[dates[0], "t1_fill_status"] == "UNFILLED_LIMIT_UP_T1"
-    assert np.isnan(out.loc[dates[0], "fwd_ret_1d"])
-    assert out.loc[dates[1], "t1_fill_status"] == "ELIGIBLE_T1_OPEN_HYPOTHETICAL"
-    assert out.loc[dates[2], "t1_fill_status"] == "UNFILLED_SUSPENDED_T1"
+    assert out.loc[dates[0], "t1_fill_status"] == "OPEN_LIMIT_UP_FILL_UNVERIFIED_T1"
+    assert out.loc[dates[0], "t1_execution_class"] == "FILL_UNVERIFIED"
+    assert out.loc[dates[0], "fwd_ret_1d"] == pytest.approx(10.9 / 11.0 - 1.0)  # hypothetical kept
+    assert np.isnan(out.loc[dates[0], "exec_ret_1d"])  # never counted as executable
+    assert out.loc[dates[1], "t1_fill_status"] == "ELIGIBLE_T1_OPEN_STATUS_CHECKED"
+    # suspended=True with trusted source is confirmed; checked before the zero-volume fallback
+    assert out.loc[dates[2], "t1_fill_status"] == "SUSPENDED_T1_STATUS_CONFIRMED"
+    assert np.isnan(out.loc[dates[2], "fwd_ret_1d"])
     no_status = _joined(["600000.SH"], dates)
     out2 = build_forward_outcome_labels(no_status, trading_calendar=dates, horizons=(1,))
     assert set(out2["t1_fill_status"].iloc[:-1]) == {"TRADABILITY_UNVERIFIED_T1"}
