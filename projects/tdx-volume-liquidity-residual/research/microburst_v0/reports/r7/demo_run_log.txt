@@ -1,0 +1,72 @@
+$ python run_demo.py
+{
+  "study_mode": "SYNTHETIC_DEMO",
+  "study_context": {
+    "study_mode": "SYNTHETIC_DEMO",
+    "research_grade": "SYNTHETIC_DEMO_ONLY",
+    "calendar_kind": "SYNTHETIC_GENERATED",
+    "calendar_sha256": "76b5b1daa2118ab330c0aa670226091b5dd3bb7cabc0ad7c07e6c309fb9355dd",
+    "calendar_source": "mbv.adapters.generate_synthetic_market_bundle(seed=20261111, n_sessions=170)",
+    "calendar_sessions": 170
+  },
+  "minute_rows": 6480,
+  "daily_rows": 510,
+  "mbv_rows": 135,
+  "joined_rows": 510,
+  "mbv_feature_status_counts": {
+    "OK": 90,
+    "INSUFFICIENT_HISTORY": 45
+  },
+  "joined_feature_status_counts": {
+    "MISSING_MINUTE_DATA": 375,
+    "OK": 90,
+    "INSUFFICIENT_HISTORY": 45
+  },
+  "burst_regime_counts": {
+    "NO_BURST": 69,
+    "UNAVAILABLE": 45,
+    "BULL_DOMINATED_BURSTS": 9,
+    "TWO_WAY_OFFSETTING": 7,
+    "ISOLATED_SINGLE_BURST": 5
+  },
+  "ok_days_with_bursts": 21,
+  "ok_days_mean_burst_share": 0.052996782118997415,
+  "b0_event_counts": {
+    "B0_EU": 8,
+    "B0_ABU": 1,
+    "B0_VU": 1,
+    "B0_ED": 0,
+    "B0_ABD": 0,
+    "B0_VD": 0
+  },
+  "parquet": "WRITTEN",
+  "study_conclusion": "NO_RESEARCH_CONCLUSION: SYNTHETIC_DEMO output only exercises the code path; it is not evidence of MBV incremental value or alpha.",
+  "study_statuses": {
+    "matched_control_h1": "INCONCLUSIVE",
+    "matched_control_h2": "INCONCLUSIVE",
+    "permutation_control_e": "COMPLETED",
+    "bootstrap": "OK",
+    "board_policy": "strict"
+  },
+  "t1_fill_status_counts": {
+    "TRADABILITY_UNVERIFIED_T1": 507,
+    "PENDING_FUTURE_SESSION": 3
+  },
+  "t1_execution_class_counts": {
+    "FILL_UNVERIFIED": 507,
+    "NO_DATA": 3
+  },
+  "feature_status_counts": {
+    "MISSING_MINUTE_DATA": 375,
+    "OK": 90,
+    "INSUFFICIENT_HISTORY": 45
+  },
+  "vlr_reference_hashes": {
+    "vlr.py": "3dfba129c22282b3409a0d32f6781638b0699d8c1d2393e81a0cd8ec7b3f07b8",
+    "validation.py": "bc647ac1e64753a1bc2af15525a755b9162f646acd99e299a475ee96cc5a12d3",
+    "inference.py": "ed2243298785c93755f2a5cf20e5f9d930b544ce2e6523f9703508a07732bef1"
+  },
+  "report_path": "/home/antigravity/allen200909/stock/projects/tdx-volume-liquidity-residual/research/microburst_v0/examples/demo_outputs/study_report.md",
+  "manifest_path": "/home/antigravity/allen200909/stock/projects/tdx-volume-liquidity-residual/research/microburst_v0/examples/demo_outputs/run_manifest.json"
+}
+exit_code=0
