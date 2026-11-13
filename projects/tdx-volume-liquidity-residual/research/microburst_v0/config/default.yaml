@@ -41,3 +41,8 @@ event_study:
   bootstrap_repetitions: 500
   bootstrap_seed: 20261013
   confidence: 0.95
+  # R6 / WP-C (pre-registered, not tuned)
+  board_policy: "strict"      # "strict" (default, no silent relaxation) | "relax_explicit" (counted) | "ignore"
+  matching_seed: 20261111     # Seed for drawing a matched control among eligible candidates
+  permutation_n: 1000         # Group E within-RVOL-bucket permutations
+  permutation_seed: 20261111

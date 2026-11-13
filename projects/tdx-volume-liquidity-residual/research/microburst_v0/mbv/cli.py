@@ -50,6 +50,27 @@ def load_config(config_path: Optional[str | Path] = None) -> dict[str, Any]:
     return cfg
 
 
+def event_study_kwargs(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Map `event_study` config keys onto `run_event_study` keyword arguments (frozen defaults, no tuning)."""
+    ec = cfg.get("event_study", {}) or {}
+    return {
+        "horizons": [int(h) for h in ec.get("horizons", [1, 3, 5, 10, 20])],
+        "min_events_per_group": int(ec.get("min_events_per_group", 5)),
+        "mbv_share_cut": float(ec.get("mbv_share_cut", 0.15)),
+        "mbv_dominance_cut": float(ec.get("mbv_dominance_cut", 0.25)),
+        "mbv_abs_dom_weak_cut": float(ec.get("mbv_abs_dom_weak_cut", 0.25)),
+        "rvol_buckets": [float(x) for x in ec.get("rvol_buckets", [0.0, 1.2, 1.5, 2.2, 3.0, 100.0])],
+        "bootstrap_blocks": [int(b) for b in ec.get("bootstrap_blocks", [5, 10, 20])],
+        "bootstrap_repetitions": int(ec.get("bootstrap_repetitions", 500)),
+        "bootstrap_seed": int(ec.get("bootstrap_seed", 20261013)),
+        "confidence": float(ec.get("confidence", 0.95)),
+        "board_policy": str(ec.get("board_policy", "strict")),
+        "matching_seed": int(ec.get("matching_seed", 20261111)),
+        "permutation_n": int(ec.get("permutation_n", 1000)),
+        "permutation_seed": int(ec.get("permutation_seed", 20261111)),
+    }
+
+
 def compute_mbv_daily_pipeline(
     minute_df: pd.DataFrame,
     *,
@@ -219,7 +240,6 @@ def cmd_join_vlr(args: argparse.Namespace) -> int:
 
 def cmd_study(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
-    ec = cfg.get("event_study", {})
     joined_df = _read_table(args.joined)
     cal_df = _read_table(args.calendar)
 
@@ -228,16 +248,7 @@ def cmd_study(args: argparse.Namespace) -> int:
         joined_df,
         trading_calendar=cal_df,
         study_mode=study_mode,
-        horizons=ec.get("horizons", [1, 3, 5, 10, 20]),
-        min_events_per_group=int(ec.get("min_events_per_group", 5)),
-        mbv_share_cut=float(ec.get("mbv_share_cut", 0.15)),
-        mbv_dominance_cut=float(ec.get("mbv_dominance_cut", 0.25)),
-        mbv_abs_dom_weak_cut=float(ec.get("mbv_abs_dom_weak_cut", 0.25)),
-        rvol_buckets=ec.get("rvol_buckets", [0.0, 1.2, 1.5, 2.2, 3.0, 100.0]),
-        bootstrap_blocks=ec.get("bootstrap_blocks", [5, 10, 20]),
-        bootstrap_repetitions=int(ec.get("bootstrap_repetitions", 500)),
-        bootstrap_seed=int(ec.get("bootstrap_seed", 20261013)),
-        confidence=float(ec.get("confidence", 0.95)),
+        **event_study_kwargs(cfg),
     )
 
     outdir = Path(args.outdir)
@@ -309,21 +320,11 @@ def run_synthetic_demo_workflow(
     mbv_df.to_csv(outputs["mbv_daily_features"], index=False)
     joined_df.to_csv(outputs["joined_vlr_mbv"], index=False)
 
-    ec = cfg.get("event_study", {})
     study_res = run_event_study(
         joined_df,
         trading_calendar=bundle["calendar"],
         study_mode="SYNTHETIC_DEMO",
-        horizons=ec.get("horizons", [1, 3, 5, 10, 20]),
-        min_events_per_group=int(ec.get("min_events_per_group", 5)),
-        mbv_share_cut=float(ec.get("mbv_share_cut", 0.15)),
-        mbv_dominance_cut=float(ec.get("mbv_dominance_cut", 0.25)),
-        mbv_abs_dom_weak_cut=float(ec.get("mbv_abs_dom_weak_cut", 0.25)),
-        rvol_buckets=ec.get("rvol_buckets", [0.0, 1.2, 1.5, 2.2, 3.0, 100.0]),
-        bootstrap_blocks=ec.get("bootstrap_blocks", [5, 10, 20]),
-        bootstrap_repetitions=int(ec.get("bootstrap_repetitions", 500)),
-        bootstrap_seed=int(ec.get("bootstrap_seed", 20261013)),
-        confidence=float(ec.get("confidence", 0.95)),
+        **event_study_kwargs(cfg),
     )
     outputs["group_summary"] = out_dir / "group_summary.csv"
     outputs["forward_outcomes_labels"] = out_dir / "forward_outcomes_labels.csv"
@@ -361,6 +362,15 @@ def run_synthetic_demo_workflow(
             for ev in ("B0_EU", "B0_ABU", "B0_VU", "B0_ED", "B0_ABD", "B0_VD") if ev in joined_df.columns
         },
         "parquet": parquet_status,
+        "study_conclusion": study_res["conclusion"],
+        "study_statuses": {
+            "matched_control_h1": study_res["matched_control_h1"]["status"],
+            "matched_control_h2": study_res["matched_control_h2"]["status"],
+            "permutation_control_e": study_res["permutation_control_e"]["status"],
+            "bootstrap": study_res["bootstrap_status"],
+            "board_policy": study_res["matched_control_h1"]["board_policy"],
+        },
+        "t1_fill_status_counts": study_res["t1_fill_status_counts"],
     }
     manifest = build_run_manifest(
         cfg=cfg,
